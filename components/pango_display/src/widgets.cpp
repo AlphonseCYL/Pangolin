@@ -42,8 +42,6 @@
 
 using namespace std;
 
-extern const unsigned char AnonymousPro_ttf[];
-
 namespace pangolin
 {
 
@@ -54,6 +52,9 @@ const static GLfloat colour_fg[4] = {1.0f, 1.0f, 1.0f, 1.0f};
 const static GLfloat colour_tx[4] = {0.0f, 0.0f, 0.0f, 1.0f};
 const static GLfloat colour_dn[4] = {1.0f, 0.7f, 0.7f, 1.0f};
 
+// TODO: It doesn't look like this is doing anything meaningful right now...
+std::mutex display_mutex;
+
 // Render at (x,y) in window coordinates.
 inline void DrawWindow(GlText& text, GLfloat x, GLfloat y, GLfloat z = 0.0)
 {
@@ -61,12 +62,15 @@ inline void DrawWindow(GlText& text, GLfloat x, GLfloat y, GLfloat z = 0.0)
     GLint    view[4];
     glGetIntegerv(GL_VIEWPORT, view );
 
+    auto& d = DisplayBase();
+    d.Activate();
     glMatrixMode(GL_PROJECTION);
     glPushMatrix();
+    // Pixel continuous coords
+    ProjectionMatrixOrthographic(-0.5, d.v.w-0.5, -0.5, d.v.h-0.5, -1.0, 1.0).Load();
     glMatrixMode(GL_MODELVIEW);
     glPushMatrix();
-
-    DisplayBase().ActivatePixelOrthographic();
+    glLoadIdentity();
 
     glTranslatef( std::floor(x), std::floor(y), z);
     text.Draw();
@@ -91,19 +95,24 @@ static inline int tab_h()
     return (int)(default_font().Height() * 1.4);
 }
 
-std::mutex display_mutex;
+static inline float x_width()
+{
+  return default_font().Text("x").Width();
+}
 
 template<typename T>
-void GuiVarChanged( Var<T>& var)
+inline void MarkVarChangedByGui(VarValueT<T>& var)
 {
-    VarState::I().FlagVarChanged();
     var.Meta().gui_changed = true;
+    FlagVarChanged();
+}
 
-    for(std::vector<GuiVarChangedCallback>::iterator igvc = VarState::I().gui_var_changed_callbacks.begin(); igvc != VarState::I().gui_var_changed_callbacks.end(); ++igvc) {
-        if( StartsWith(var.Meta().full_name, igvc->filter) ) {
-           igvc->fn( igvc->data, var.Meta().full_name, var.Ref() );
-        }
-    }
+void glLine(GLfloat vs[4])
+{
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glVertexPointer(2, GL_FLOAT, 0, vs);
+    glDrawArrays( GL_LINE_STRIP, 0, 2);
+    glDisableClientState(GL_VERTEX_ARRAY);
 }
 
 void glRect(Viewport v)
@@ -159,17 +168,36 @@ Panel::Panel()
 }
 
 Panel::Panel(const std::string& auto_register_var_prefix)
+    : auto_register_var_prefix(auto_register_var_prefix)
 {
     handler = &StaticHandlerScroll;
     layout = LayoutVertical;
-    RegisterNewVarCallback(&Panel::AddVariable,(void*)this,auto_register_var_prefix);
-    ProcessHistoricCallbacks(&Panel::AddVariable,(void*)this,auto_register_var_prefix);
+
+    // Register for notifications on var additions
+    var_added_connection = VarState::I().RegisterForVarEvents(
+        std::bind(&Panel::NewVarCallback,this,std::placeholders::_1),
+        true
+    );
 }
 
-void Panel::AddVariable(void* data, const std::string& name, const std::shared_ptr<VarValueGeneric>& var, bool /*brand_new*/)
+void Panel::NewVarCallback(const VarState::Event& e)
 {
-    Panel* thisptr = (Panel*)data;
-    
+    const std::string name = e.var->Meta().full_name;
+    if(!StartsWith(name, auto_register_var_prefix))
+        return;
+
+    switch(e.action) {
+    case VarState::Event::Action::Added:
+        AddVariable(name, e.var);
+        break;
+    case VarState::Event::Action::Removed:
+        RemoveVariable(name);
+        break;
+    }
+}
+
+void Panel::AddVariable(const std::string& name, const std::shared_ptr<VarValueGeneric>& var)
+{
     const string& title = var->Meta().friendly;
     
     display_mutex.lock();
@@ -202,9 +230,26 @@ void Panel::AddVariable(void* data, const std::string& name, const std::shared_p
         }
         if(nv) {
             GetCurrentContext()->named_managed_views[name] = nv;
-            thisptr->views.push_back( nv );
-            thisptr->ResizeChildren();
+            views.push_back( nv );
+            ResizeChildren();
         }
+    }
+
+    display_mutex.unlock();
+}
+
+void Panel::RemoveVariable(const std::string& name)
+{
+    display_mutex.lock();
+
+    ViewMap::iterator pnl = GetCurrentContext()->named_managed_views.find(name);
+
+    if( pnl != GetCurrentContext()->named_managed_views.end() ) {
+      views.erase(std::remove(views.begin(), views.end(), pnl->second), views.end());
+      ResizeChildren();
+
+      delete pnl->second;
+      GetCurrentContext()->named_managed_views.erase(pnl);
     }
 
     display_mutex.unlock();
@@ -274,7 +319,7 @@ void Button::Mouse(View&, MouseButton button, int /*x*/, int /*y*/, bool pressed
         down = pressed;
         if( !pressed ) {
             var->Set(!var->Get());
-            GuiVarChanged(*this);
+            MarkVarChangedByGui(*var);
         }
     }
 }
@@ -314,7 +359,7 @@ void FunctionButton::Mouse(View&, MouseButton button, int /*x*/, int /*y*/, bool
         down = pressed;
         if (!pressed) {
             var->Get()();
-            GuiVarChanged(*this);
+            MarkVarChangedByGui(*var);
         }
     }
 }
@@ -352,7 +397,7 @@ void Checkbox::Mouse(View&, MouseButton button, int /*x*/, int /*y*/, bool press
 {
     if( button == MouseButtonLeft && pressed ) {
         var->Set(!var->Get());
-        GuiVarChanged(*this);
+        MarkVarChangedByGui(*var);
     }
 }
 
@@ -375,6 +420,9 @@ void Checkbox::Render()
         glRect(vcb);
     }
     glColor4fv(colour_tx);
+    if(gltext.Text() != var->Meta().friendly) {
+        gltext = default_font().Text(var->Meta().friendly);
+    }
     DrawWindow(gltext, raster[0], raster[1]);
     DrawShadowRect(vcb, val);
 }
@@ -418,12 +466,13 @@ void Slider::Keyboard(View&, unsigned char key, int /*x*/, int /*y*/, bool press
             if (key == '+') inc *=  0.1;
             const double newval = max(var->Meta().range[0], min(var->Meta().range[1], val + inc));
             var->Set( logscale ? exp(newval) : newval );
+            MarkVarChangedByGui(*var);
         }else if(key == 'r'){
             Reset();
+            MarkVarChangedByGui(*var);
         }else{
             return;
         }
-        GuiVarChanged(*this);
     }
 }
 
@@ -489,7 +538,7 @@ void Slider::MouseMotion(View&, int x, int /*y*/, int /*mouse_state*/)
         }
 
         var->Set(val);
-        GuiVarChanged(*this);
+        MarkVarChangedByGui(*var);
     }
 }
 
@@ -537,7 +586,7 @@ void Slider::Render()
 TextInput::TextInput(std::string title, const std::shared_ptr<VarValueGeneric> &tv)
     : Widget<std::string>(title+":", tv), can_edit(!(tv->Meta().flags & META_FLAG_READONLY)), do_edit(false)
 {
-    top = 1.0; bottom = Attach::Pix(-tab_h());
+    top = 1.0; bottom = Attach::Pix(-2 * tab_h());
     left = 0.0; right = 1.0;
     hlock = LockLeft;
     vlock = LockBottom;
@@ -556,7 +605,7 @@ void TextInput::Keyboard(View&, unsigned char key, int /*x*/, int /*y*/, bool pr
         if(key == 13)
         {
             var->Set(edit);
-            GuiVarChanged(*this);
+            MarkVarChangedByGui(*var);
 
             do_edit = false;
             sel[0] = sel[1] = -1;
@@ -606,6 +655,7 @@ void TextInput::Keyboard(View&, unsigned char key, int /*x*/, int /*y*/, bool pr
             sel[0]++;
             sel[1]++;
         }
+        CalcVisibleEditPart();
     }
 }
 
@@ -616,17 +666,18 @@ void TextInput::Mouse(View& /*view*/, MouseButton button, int x, int /*y*/, bool
 
         if(do_edit)
         {
-            const int sl = (int)gledit.Width() + 2;
+            const int sl = (int)gledit.Width() + vertical_margin;
             const int rl = v.l + v.w - sl;
-            int ep = (int)edit.length();
-
+            std::string edit_visible = edit.substr(edit_visible_part[0], edit_visible_part[1]);
+            int ep = (int)edit_visible.length();
+            
             if( x < rl )
             {
                 ep = 0;
             }else{
-                for( unsigned i=0; i<edit.length(); ++i )
+                for( unsigned i=0; i<edit_visible.length(); ++i )
                 {
-                    const int tl = (int)(rl + default_font().Text(edit.substr(0,i)).Width());
+                    const int tl = (int)(rl + default_font().Text(edit_visible.substr(0,i)).Width());
                     if(x < tl+2)
                     {
                         ep = i;
@@ -636,9 +687,9 @@ void TextInput::Mouse(View& /*view*/, MouseButton button, int x, int /*y*/, bool
             }
             if(pressed)
             {
-                sel[0] = sel[1] = ep;
+                sel[0] = sel[1] = ep + edit_visible_part[0];
             }else{
-                sel[1] = ep;
+                sel[1] = ep + edit_visible_part[0];
             }
 
             if(sel[0] > sel[1])
@@ -657,15 +708,16 @@ void TextInput::MouseMotion(View&, int x, int /*y*/, int /*mouse_state*/)
     {
         const int sl = (int)gledit.Width() + 2;
         const int rl = v.l + v.w - sl;
-        int ep = (int)edit.length();
-
+        std::string edit_visible = edit.substr(edit_visible_part[0], edit_visible_part[1]);
+        int ep = (int)edit_visible.length();
+        
         if( x < rl )
         {
             ep = 0;
         }else{
             for( unsigned i=0; i<edit.length(); ++i )
             {
-                const int tl = (int)(rl + default_font().Text(edit.substr(0,i)).Width());
+                const int tl = (int)(rl + default_font().Text(edit_visible.substr(0,i)).Width());
                 if(x < tl+2)
                 {
                     ep = i;
@@ -673,43 +725,66 @@ void TextInput::MouseMotion(View&, int x, int /*y*/, int /*mouse_state*/)
                 }
             }
         }
-
-        sel[1] = ep;
+        
+        sel[1] = ep + edit_visible_part[0];
     }
 }
 
 
 void TextInput::ResizeChildren()
 {
-    raster[0] = v.l + 2.0f;
-    raster[1] = v.b + (v.h-gltext.Height()) / 2.0f;
+    vertical_margin = (v.h-2.f*gltext.Height()) / 4.0f;
+    input_width = v.w - 2 * horizontal_margin;
+    int max_possible_chars = floor(input_width / x_width());
+    edit_visible_part[1] = max_possible_chars;
+    CalcVisibleEditPart();
 }
+
+void TextInput::CalcVisibleEditPart()
+{
+    edit_visible_part[0] =  0;
+
+    if(default_font().Text(edit).Width() > input_width)
+    {
+      if(sel[1] >= 0 )
+      {
+        edit_visible_part[0] = max(0, sel[1] - edit_visible_part[1]);
+      }
+    }
+};
 
 void TextInput::Render()
 {
     if(!do_edit) edit = var->Get();
 
-    gledit = default_font().Text(edit);
+    Viewport input_v(v.l,v.b,v.w,v.h / 2);
     
     glColor4fv(colour_fg);
-    if(can_edit) glRect(v);
+    if(can_edit) glRect(input_v);
 
-    const int sl = (int)gledit.Width() + 2;
+    std::string edit_visible = edit.substr(edit_visible_part[0], edit_visible_part[1]);
+    gledit = default_font().Text(edit_visible);
+
+    const int sl = (int)gledit.Width() + horizontal_margin;
     const int rl = v.l + v.w - sl;
 
     if( do_edit && sel[0] >= 0)
     {
-        const int tl = (int)(rl + default_font().Text(edit.substr(0,sel[0])).Width());
-        const int tr = (int)(rl + default_font().Text(edit.substr(0,sel[1])).Width());
+        const int tl = (int)(rl + default_font().Text(edit_visible.substr(0,sel[0] - edit_visible_part[0])).Width());
+        const int tr = (int)(rl + default_font().Text(edit_visible.substr(0,sel[1] - edit_visible_part[0])).Width());
         glColor4fv(colour_dn);
-        glRect(Viewport(tl,v.b,tr-tl,v.h));
+        glRect(Viewport(tl,input_v.b,tr-tl,input_v.h));
+
+        glColor4fv(colour_tx);
+        GLfloat caret[4] = {(float) tr, (float) input_v.b, (float) tr, (float) input_v.b + input_v.h};
+        glLine(caret);
     }
 
     glColor4fv(colour_tx);
-    DrawWindow(gltext, raster[0], raster[1]);
+    DrawWindow(gltext, v.l + horizontal_margin, v.b + gltext.Height() + 3.f * vertical_margin);
 
-    DrawWindow(gledit, (GLfloat)(rl), raster[1]);
-    if(can_edit) DrawShadowRect(v);
+    DrawWindow(gledit, (GLfloat)(rl), input_v.b + vertical_margin);
+    if(can_edit) DrawShadowRect(input_v);
 }
 
 }

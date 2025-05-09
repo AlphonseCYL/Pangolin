@@ -39,7 +39,6 @@
 #include <pangolin/gl/gl.h>
 #include <pangolin/gl/gldraw.h>
 #include <pangolin/factory/factory_registry.h>
-#include <pangolin/factory/RegisterFactoriesWindowInterface.h>
 #include <pangolin/display/display.h>
 #include <pangolin/display/process.h>
 #include <pangolin/console/ConsoleView.h>
@@ -50,6 +49,8 @@
 #include <pangolin/var/var.h>
 
 #include "pangolin_gl.h"
+
+extern const unsigned char AnonymousPro_ttf[];
 
 namespace pangolin
 {
@@ -62,7 +63,6 @@ std::recursive_mutex contexts_mutex;
 
 // Context active for current thread
 __thread PangolinGl* context = 0;
-
 
 void SetCurrentContext(PangolinGl* newcontext) {
     context = newcontext;
@@ -84,9 +84,6 @@ PangolinGl *FindContext(const std::string& name)
 
 WindowInterface& CreateWindowAndBind(std::string window_title, int w, int h, const Params& params)
 {
-    // Make sure factories are loaded
-    RegisterFactoriesWindowInterface();
-
     std::unique_lock<std::recursive_mutex> l(contexts_mutex);
 
     pangolin::Uri win_uri;
@@ -100,17 +97,26 @@ WindowInterface& CreateWindowAndBind(std::string window_title, int w, int h, con
         win_uri.scheme = "default";
     }
 
-    // Allow params to override
-    win_uri.scheme = params.Get("scheme", win_uri.scheme);
-
     // Override with anything the program specified
-    win_uri.params.insert(std::end(win_uri.params), std::begin(params.params), std::end(params.params));
+    for(const auto& param : params.params) {
+        if(param.first != "scheme") win_uri.params.push_back(param);
+    }
+
+    // Special params that shouldn't get passed to window factory
+    win_uri.scheme = win_uri.Get("scheme", win_uri.scheme);
+    const std::string default_font = win_uri.Get<std::string>("default_font","");
+    const int default_font_size = win_uri.Get("default_font_size", 18);
+    win_uri.Remove("scheme");
+    win_uri.Remove("default_font");
+    win_uri.Remove("default_font_size");
+
+    // Additional arguments we will send to factory
     win_uri.Set("w", w);
     win_uri.Set("h", h);
     win_uri.Set("window_title", window_title);
 
     auto context = std::make_shared<PangolinGl>();
-    context->window = FactoryRegistry::I()->Construct<WindowInterface>(win_uri);
+    context->window = ConstructWindow(win_uri);
     assert(context->window);
 
     RegisterNewContext(window_title, context);
@@ -137,8 +143,18 @@ WindowInterface& CreateWindowAndBind(std::string window_title, int w, int h, con
         process::SpecialInput(event.inType, event.x, event.y, event.p[0], event.p[1], event.p[2], event.p[3], event.key_modifiers);
     });
 
+    // If there is a special font request
+    if( !default_font.empty() ) {
+        const std::string font_filename = PathExpand(default_font);
+        context->font = std::make_shared<GlFont>(font_filename, default_font_size);
+    }else{
+        context->font = std::make_shared<GlFont>(AnonymousPro_ttf, default_font_size);
+    }
+
     context->MakeCurrent();
+#ifdef HAVE_GLEW
     glewInit();
+#endif
 
     // And finally process pending window events (such as resize) now that we've setup our callbacks.
     context->window->ProcessEvents();
@@ -219,7 +235,7 @@ void Quit()
 
 void QuitAll()
 {
-    for(auto nc : contexts) {
+    for(auto& nc : contexts) {
         nc.second->quit = true;
     }
 }
@@ -300,9 +316,14 @@ View& Display(const std::string& name)
     }
 }
 
-void RegisterKeyPressCallback(int key, std::function<void(void)> func)
+void RegisterKeyPressCallback(int key, std::function<void(int)> func)
 {
     context->keypress_hooks[key] = func;
+}
+
+void RegisterKeyPressCallback(int key, std::function<void(void)> func)
+{
+    context->keypress_hooks[key] = [=](int){func();};
 }
 
 void SaveWindowOnRender(const std::string& filename, const Viewport& v)

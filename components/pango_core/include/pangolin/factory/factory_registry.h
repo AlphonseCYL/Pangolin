@@ -143,7 +143,13 @@ public:
     class Exception : public std::exception {
     public:
         Exception(const Uri& uri) : uri(uri) {
-            err = "Unable to open URI " + uri.full_uri + ".";
+            err = "Unable to open URI";
+            err += "\n  full_uri: " + uri.full_uri;
+            err += "\n  scheme: " + uri.scheme;
+            err += "\n  params:\n";
+            for(const auto& p : uri.params) {
+                err += "    " + p.first + " = " + p.second + "\n";
+            }
         }
         virtual const char* what() const throw() override {
             return err.c_str();
@@ -181,21 +187,24 @@ private:
     std::map<std::type_index, TypeRegistry> type_registries;
 };
 
-/// This macro can be used as a template for registering a factory class
-/// You should add a corresponding line in your cmake:
+/// Macro to define factory entry point. Add a corresponding line in your cmake:
 ///    `PangolinRegisterFactory(MyInterfaceType MyFactoryType)`
+/// in order to have the method added to an initialization method for MyInterfaceType
+///
 /// \tparam x is the factory interface class (such as WindowInterface, VideoInterface, etc)
 /// \return true iff registration was successful.
-// Forward declaration; static load variable; definition
 #define PANGOLIN_REGISTER_FACTORY(x) \
     bool Register ## x ## Factory()
-    // {
-    //    return FactoryRegistry::I()->RegisterFactory<x>(std::make_shared<MyFactoryClass>());
-    // }
+//  {
+//    return FactoryRegistry::I()->RegisterFactory<x>(std::make_shared<MyFactoryClass>());
+//  }
 
-/// This macro can be used as a template for registering a factory class.
-/// It will automatically register itself via static initialization, but this may not work
-/// correctly in some circumstances.
+/// Macro to define factory entry point with automatic static initialization.
+/// Use this instead of the macro above to automatically register a factory when the compilation
+/// unit is loaded, and you can guarentee the symbols will remain.
+/// e.g. within a dynamic library which you will explicitly load, or within the same
+/// compilation unit as your main().
+///
 /// \tparam x is the factory interface class (such as WindowInterface, VideoInterface, etc)
 /// \return true iff registration was successful.
 // Forward declaration; static load variable; definition
@@ -203,7 +212,7 @@ private:
     bool Register ## x ## Factory(); \
     static const bool Load ## x ## Success = Register ## x ## Factory(); \
     bool Register ## x ## Factory()
-    // {
-    //    return FactoryRegistry::I()->RegisterFactory<x>(std::make_shared<MyFactoryClass>());
-    // }
+//  {
+//    return FactoryRegistry::I()->RegisterFactory<x>(std::make_shared<MyFactoryClass>());
+//  }
 }

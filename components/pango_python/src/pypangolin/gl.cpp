@@ -47,6 +47,9 @@ namespace py_pangolin {
     pybind11::class_<pangolin::GlTexture>(m, "GlTexture")
       .def(pybind11::init<>())
       .def(pybind11::init<GLint, GLint, GLint, bool, int, GLenum, GLenum>(), pybind11::arg("width"), pybind11::arg("height"), pybind11::arg("internal_format") = GL_RGBA8, pybind11::arg("sampling_linear") = true, pybind11::arg("border") = 0, pybind11::arg("glformat") = GL_RGBA, pybind11::arg("gltype") = GL_UNSIGNED_BYTE)
+      .def("Reinitialise", &pangolin::GlTexture::Reinitialise)
+      .def("Bind", &pangolin::GlTexture::Bind)
+      .def("Unbind", &pangolin::GlTexture::Unbind)
       .def("Upload", [](pangolin::GlTexture & texture, pybind11::buffer b, GLenum data_format, GLenum type){
         pybind11::buffer_info info = b.request();
         texture.Upload(info.ptr, data_format, type);
@@ -61,14 +64,21 @@ namespace py_pangolin {
       .def("Save", &pangolin::GlTexture::Save, pybind11::arg("filename"), pybind11::arg("top_line_first")=true)
       .def("RenderToViewport", (void (pangolin::GlTexture::*)() const)&pangolin::GlTexture::RenderToViewport)
       .def("RenderToViewportFlipY", &pangolin::GlTexture::RenderToViewportFlipY)
-      .def("SetNearestNeighbour", &pangolin::GlTexture::SetNearestNeighbour);
+      .def("SetNearestNeighbour", &pangolin::GlTexture::SetNearestNeighbour)
+      .def_readonly("width", &pangolin::GlTexture::width)
+      .def_readonly("height", &pangolin::GlTexture::height)
+      .def_readonly("id", &pangolin::GlTexture::tid);
 
     pybind11::class_<pangolin::GlRenderBuffer>(m, "GlRenderBuffer")
       .def(pybind11::init<GLint, GLint, GLint>(), pybind11::arg("width")=0, pybind11::arg("height")=0, pybind11::arg("internal_format") = GL_DEPTH_COMPONENT24)
       .def("Reinitialise", &pangolin::GlRenderBuffer::Reinitialise);
 
     pybind11::class_<pangolin::GlFramebuffer>(m, "GlFramebuffer")
+      .def(pybind11::init<>())
       .def(pybind11::init<pangolin::GlTexture &, pangolin::GlRenderBuffer &>())
+      .def("Reinitialise", &pangolin::GlFramebuffer::Reinitialise)
+      .def("AttachColour", &pangolin::GlFramebuffer::AttachColour)
+      .def("AttachDepth", &pangolin::GlFramebuffer::AttachDepth)
       .def("Bind", &pangolin::GlFramebuffer::Bind)
       .def("Unbind", &pangolin::GlFramebuffer::Unbind);
 

@@ -60,14 +60,18 @@ void Keyboard(unsigned char key, int x, int y, bool pressed, KeyModifierBitmask 
         if( context->console_view && context->console_view->IsShown() ) {
             context->console_view->Keyboard(*(context->console_view),key,x,y,true);
         }else if(hook != context->keypress_hooks.end() ) {
-            hook->second();
+            hook->second(key);
         } else if(context->activeDisplay && context->activeDisplay->handler) {
             context->activeDisplay->handler->Keyboard(*(context->activeDisplay),key,x,y,true);
+        }else{
+            context->base.handler->Keyboard(context->base, key,x,y,true);
         }
     }else{
         if(context->activeDisplay && context->activeDisplay->handler)
         {
             context->activeDisplay->handler->Keyboard(*(context->activeDisplay),key,x,y,false);
+        }else{
+            context->base.handler->Keyboard(context->base, key,x,y,false);
         }
     }
 }

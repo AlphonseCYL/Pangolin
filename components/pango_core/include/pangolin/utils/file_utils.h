@@ -63,6 +63,15 @@ std::string PathExpand(const std::string& sPath);
 PANGOLIN_EXPORT
 bool MatchesWildcard(const std::string& str, const std::string& wildcard);
 
+PANGOLIN_EXPORT
+std::string GetFileContents(const std::string& filename);
+
+PANGOLIN_EXPORT
+std::string GetExecutablePath();
+
+PANGOLIN_EXPORT
+std::string GetExecutableDir();
+
 enum class SortMethod {
   STANDARD,
   NATURAL 

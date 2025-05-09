@@ -1,9 +1,8 @@
 #include <pangolin/platform.h>
-#include <pangolin/display/display.h>
-#include <pangolin/display/display_internal.h>
 #include <pangolin/factory/factory_registry.h>
 #include <pangolin/gl/colour.h>
 #include <pangolin/gl/gldraw.h>
+#include <pangolin/windowing/window.h>
 
 #include <wayland-client.h>
 #include <wayland-egl.h>
@@ -18,28 +17,31 @@
 #include <unistd.h>
 #include <cstdlib>
 
-#if USE_WL_XDG
 #include <xdg-shell-client-protocol.h>
-#endif
 
 #define WAYLAND_VERSION_GE(MAJ, MIN) WAYLAND_VERSION_MAJOR >= MAJ && WAYLAND_VERSION_MINOR >= MIN
 
-namespace pangolin {
+// The "wl_array_for_each" C macro for C++
+// https://github.com/libretro/RetroArch/blob/a9125fffaa981cab811ba6caf4d756fa6ef9a561/input/common/wayland_common.h#L50-L53
+#define WL_ARRAY_FOR_EACH(pos, array, type) \
+    for (pos = (type)(array)->data; \
+         (const char *) pos < ((const char *) (array)->data + (array)->size); \
+         (pos)++)
 
-extern __thread PangolinGl* context;
+namespace pangolin {
 
 namespace wayland {
 
-static const std::map<enum wl_shell_surface_resize, std::string> resize_cursor = {
-    {WL_SHELL_SURFACE_RESIZE_NONE, "grabbing"},
-    {WL_SHELL_SURFACE_RESIZE_TOP, "top_side"},
-    {WL_SHELL_SURFACE_RESIZE_BOTTOM, "bottom_side"},
-    {WL_SHELL_SURFACE_RESIZE_LEFT, "left_side"},
-    {WL_SHELL_SURFACE_RESIZE_TOP_LEFT, "top_left_corner"},
-    {WL_SHELL_SURFACE_RESIZE_BOTTOM_LEFT, "bottom_left_corner"},
-    {WL_SHELL_SURFACE_RESIZE_RIGHT, "right_side"},
-    {WL_SHELL_SURFACE_RESIZE_TOP_RIGHT, "top_right_corner"},
-    {WL_SHELL_SURFACE_RESIZE_BOTTOM_RIGHT, "bottom_right_corner"}
+static const std::map<enum xdg_toplevel_resize_edge, std::string> resize_cursor = {
+    {XDG_TOPLEVEL_RESIZE_EDGE_NONE, "grabbing"},
+    {XDG_TOPLEVEL_RESIZE_EDGE_TOP, "top_side"},
+    {XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM, "bottom_side"},
+    {XDG_TOPLEVEL_RESIZE_EDGE_LEFT, "left_side"},
+    {XDG_TOPLEVEL_RESIZE_EDGE_TOP_LEFT, "top_left_corner"},
+    {XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_LEFT, "bottom_left_corner"},
+    {XDG_TOPLEVEL_RESIZE_EDGE_RIGHT, "right_side"},
+    {XDG_TOPLEVEL_RESIZE_EDGE_TOP_RIGHT, "top_right_corner"},
+    {XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_RIGHT, "bottom_right_corner"},
 };
 
 struct ButtonSurface {
@@ -71,7 +73,6 @@ struct ButtonSurface {
     {
         surface = wl_compositor_create_surface(compositor);
         subsurface = wl_subcompositor_get_subsurface(subcompositor, surface, source);
-        wl_subsurface_set_desync(subsurface);
         egl_context = eglCreateContext (egl_display, config, EGL_NO_CONTEXT, nullptr);
         egl_window = wl_egl_window_create(surface, width, height);
         egl_surface = eglCreateWindowSurface(egl_display, config, (EGLNativeWindowType)egl_window, nullptr);
@@ -121,6 +122,7 @@ struct ButtonSurface {
             glEnd();
             break;
         }
+        eglSwapInterval(egl_display, 0);
         eglSwapBuffers(egl_display, egl_surface);
     }
 };
@@ -136,12 +138,12 @@ struct DecorationSurface {
     uint border_size;
     uint title_bar_size;
 
-    enum wl_shell_surface_resize function;
+    enum xdg_toplevel_resize_edge function;
 
     DecorationSurface(wl_compositor* compositor, wl_subcompositor* subcompositor,
                       wl_surface* source, EGLDisplay egl_display, EGLConfig config,
                       const uint _border_size, const uint _title_bar_size,
-                      enum wl_shell_surface_resize type, pangolin::Colour _colour
+                      enum xdg_toplevel_resize_edge type, pangolin::Colour _colour
                       ) :
         egl_display(egl_display),
         colour(_colour),
@@ -151,7 +153,6 @@ struct DecorationSurface {
     {
         surface = wl_compositor_create_surface(compositor);
         subsurface = wl_subcompositor_get_subsurface(subcompositor, surface, source);
-        wl_subsurface_set_desync(subsurface);
         egl_context = eglCreateContext(egl_display, config, EGL_NO_CONTEXT, nullptr);
         egl_window = wl_egl_window_create(surface, 50, 50);
         egl_surface = eglCreateWindowSurface(egl_display, config, (EGLNativeWindowType)egl_window, nullptr);
@@ -169,39 +170,39 @@ struct DecorationSurface {
     void calc_dim(const int main_w, const int main_h, int &x, int &y, int &w, int &h) const {
         // get position and dimension from type and main surface
         switch (function) {
-        case WL_SHELL_SURFACE_RESIZE_NONE:
+        case XDG_TOPLEVEL_RESIZE_EDGE_NONE:
             x=0; y=-title_bar_size;
             w=main_w; h=title_bar_size;
             break;
-        case WL_SHELL_SURFACE_RESIZE_TOP:
+        case XDG_TOPLEVEL_RESIZE_EDGE_TOP:
             x=0; y=-title_bar_size-border_size;
             w=main_w; h=border_size;
             break;
-        case WL_SHELL_SURFACE_RESIZE_BOTTOM:
+        case XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM:
             x=0; y=main_h;
             w=main_w; h=border_size;
             break;
-        case WL_SHELL_SURFACE_RESIZE_LEFT:
+        case XDG_TOPLEVEL_RESIZE_EDGE_LEFT:
             x=-border_size; y=-title_bar_size;
             w=border_size; h=main_h+title_bar_size;
             break;
-        case WL_SHELL_SURFACE_RESIZE_TOP_LEFT:
+        case XDG_TOPLEVEL_RESIZE_EDGE_TOP_LEFT:
             x=-border_size; y=-border_size-title_bar_size;
             w=border_size; h=border_size;
             break;
-        case WL_SHELL_SURFACE_RESIZE_BOTTOM_LEFT:
+        case XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_LEFT:
             x=-border_size; y=main_h;
             w=border_size; h=border_size;
             break;
-        case WL_SHELL_SURFACE_RESIZE_RIGHT:
+        case XDG_TOPLEVEL_RESIZE_EDGE_RIGHT:
             x=main_w; y=-title_bar_size;
             w=border_size; h=main_h+title_bar_size;
             break;
-        case WL_SHELL_SURFACE_RESIZE_TOP_RIGHT:
+        case XDG_TOPLEVEL_RESIZE_EDGE_TOP_RIGHT:
             x=main_w; y=-border_size-title_bar_size;
             w=border_size; h=border_size;
             break;
-        case WL_SHELL_SURFACE_RESIZE_BOTTOM_RIGHT:
+        case XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_RIGHT:
             x=main_w; y=main_h;
             w=border_size; h=border_size;
             break;
@@ -219,6 +220,7 @@ struct DecorationSurface {
         eglMakeCurrent(egl_display, egl_surface, egl_surface, egl_context);
         glClearColor(colour.r, colour.g, colour.b, colour.a);
         glClear(GL_COLOR_BUFFER_BIT);
+        eglSwapInterval(egl_display, 0);
         eglSwapBuffers(egl_display, egl_surface);
     }
 };
@@ -244,24 +246,26 @@ struct Decoration {
     { }
 
     void create() {
+        destroy();
+
         // reserve memory to prevent that DecorationSurface's destructor gets
         // called by 'emplace_back'
         decorations.reserve(9);
 
         // title bar, 2D movement
-        decorations.emplace_back(compositor, subcompositor, surface, egl_display, config, border_size, title_size, WL_SHELL_SURFACE_RESIZE_NONE, colour);
+        decorations.emplace_back(compositor, subcompositor, surface, egl_display, config, border_size, title_size, XDG_TOPLEVEL_RESIZE_EDGE_NONE, colour);
 
         // sides, 1D resizing
-        decorations.emplace_back(compositor, subcompositor, surface, egl_display, config, border_size, title_size, WL_SHELL_SURFACE_RESIZE_LEFT, colour);
-        decorations.emplace_back(compositor, subcompositor, surface, egl_display, config, border_size, title_size, WL_SHELL_SURFACE_RESIZE_RIGHT, colour);
-        decorations.emplace_back(compositor, subcompositor, surface, egl_display, config, border_size, title_size, WL_SHELL_SURFACE_RESIZE_TOP, colour);
-        decorations.emplace_back(compositor, subcompositor, surface, egl_display, config, border_size, title_size, WL_SHELL_SURFACE_RESIZE_BOTTOM, colour);
+        decorations.emplace_back(compositor, subcompositor, surface, egl_display, config, border_size, title_size, XDG_TOPLEVEL_RESIZE_EDGE_LEFT, colour);
+        decorations.emplace_back(compositor, subcompositor, surface, egl_display, config, border_size, title_size, XDG_TOPLEVEL_RESIZE_EDGE_RIGHT, colour);
+        decorations.emplace_back(compositor, subcompositor, surface, egl_display, config, border_size, title_size, XDG_TOPLEVEL_RESIZE_EDGE_TOP, colour);
+        decorations.emplace_back(compositor, subcompositor, surface, egl_display, config, border_size, title_size, XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM, colour);
 
         // corners, 2D resizing
-        decorations.emplace_back(compositor, subcompositor, surface, egl_display, config, border_size, title_size, WL_SHELL_SURFACE_RESIZE_TOP_LEFT, colour);
-        decorations.emplace_back(compositor, subcompositor, surface, egl_display, config, border_size, title_size, WL_SHELL_SURFACE_RESIZE_TOP_RIGHT, colour);
-        decorations.emplace_back(compositor, subcompositor, surface, egl_display, config, border_size, title_size, WL_SHELL_SURFACE_RESIZE_BOTTOM_LEFT, colour);
-        decorations.emplace_back(compositor, subcompositor, surface, egl_display, config, border_size, title_size, WL_SHELL_SURFACE_RESIZE_BOTTOM_RIGHT, colour);
+        decorations.emplace_back(compositor, subcompositor, surface, egl_display, config, border_size, title_size, XDG_TOPLEVEL_RESIZE_EDGE_TOP_LEFT, colour);
+        decorations.emplace_back(compositor, subcompositor, surface, egl_display, config, border_size, title_size, XDG_TOPLEVEL_RESIZE_EDGE_TOP_RIGHT, colour);
+        decorations.emplace_back(compositor, subcompositor, surface, egl_display, config, border_size, title_size, XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_LEFT, colour);
+        decorations.emplace_back(compositor, subcompositor, surface, egl_display, config, border_size, title_size, XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_RIGHT, colour);
 
         // buttons
         buttons.reserve(2);
@@ -272,6 +276,10 @@ struct Decoration {
     void destroy() {
         decorations.clear();
         buttons.clear();
+    }
+
+    bool visible() {
+        return !(decorations.empty() && buttons.empty());
     }
 
     void resize(const int32_t width, const int32_t height) {
@@ -302,7 +310,17 @@ struct Decoration {
     }
 
     const std::string getCursorForCurrentSurface() const {
-        return resize_cursor.count((enum wl_shell_surface_resize)last_type) ? resize_cursor.at((enum wl_shell_surface_resize)last_type) : "left_ptr";
+        return resize_cursor.count((enum xdg_toplevel_resize_edge)last_type) ? resize_cursor.at((enum xdg_toplevel_resize_edge)last_type) : "left_ptr";
+    }
+
+    void toContentSize(const int window_w, const int window_h, int &content_w, int &content_h) {
+        content_w = window_w - (2*border_size);
+        content_h = window_h - (2*border_size + title_size);
+    }
+
+    void toWindowSize(const int content_w, const int content_h, int &window_w, int &window_h) {
+        window_w = content_w + (2*border_size);
+        window_h = content_h + (2*border_size + title_size);
     }
 
     std::vector<DecorationSurface> decorations;
@@ -326,8 +344,10 @@ struct Decoration {
 const uint Decoration::button_width = 25;
 const uint Decoration::button_height = 15;
 
+struct WaylandWindow;
+
 struct WaylandDisplay {
-    WaylandDisplay(const int width, const int height, const std::string title = "");
+    WaylandDisplay();
 
     ~WaylandDisplay();
 
@@ -335,16 +355,7 @@ struct WaylandDisplay {
     struct wl_registry *wregistry = nullptr;
     struct wl_compositor *wcompositor = nullptr;
     struct wl_subcompositor *wsubcompositor = nullptr;
-    struct wl_surface *wsurface = nullptr;
-    struct wl_egl_window *egl_window = nullptr;
-#if USE_WL_XDG
     struct xdg_wm_base *xshell = nullptr;
-    struct xdg_surface *xshell_surface = nullptr;
-    struct xdg_toplevel *xshell_toplevel = nullptr;
-#else
-    struct wl_shell *wshell = nullptr;
-    struct wl_shell_surface *wshell_surface = nullptr;
-#endif
 
     struct wl_seat *wseat = nullptr;
     struct wl_keyboard *wkeyboard = nullptr;
@@ -359,42 +370,36 @@ struct WaylandDisplay {
     struct xkb_context *xkb_context = nullptr;
     struct xkb_keymap *keymap = nullptr;
     struct xkb_state *xkb_state = nullptr;
-
-    std::unique_ptr<Decoration> decoration;
-
-    bool pressed = false;
-    int lastx=0;
-    int lasty=0;
+    KeyModifierBitmask flags;
 
     std::vector<EGLConfig> egl_configs;
-    EGLSurface egl_surface = nullptr;
     EGLContext egl_context = nullptr;
     EGLDisplay egl_display = nullptr;
 
-    EGLint width, height;
-    bool is_fullscreen;
-    bool is_maximised;
     static constexpr EGLint attribs[] = {
         EGL_RENDERABLE_TYPE , EGL_OPENGL_BIT,
         EGL_RED_SIZE        , 8,
         EGL_GREEN_SIZE      , 8,
         EGL_BLUE_SIZE       , 8,
-        EGL_ALPHA_SIZE      , 8,
         EGL_DEPTH_SIZE      , 24,
         EGL_STENCIL_SIZE    , 8,
         EGL_NONE
     };
+
+    // assume a single window for now
+    WaylandWindow* window;
 };
 
 constexpr EGLint WaylandDisplay::attribs[];
 
-struct WaylandWindow : public PangolinGl
+struct WaylandWindow : public WindowInterface
 {
-    WaylandWindow(const int width, const int height, std::unique_ptr<WaylandDisplay> display);
+public:
+    WaylandWindow(const int width, const int height, const std::string& title, std::shared_ptr<WaylandDisplay> display);
 
     ~WaylandWindow() override;
 
-    void ToggleFullscreen() override;
+    void ShowFullscreen(const TrueFalseToggle on_off) override;
 
     void Move(const int x, const int y) override;
 
@@ -408,7 +413,31 @@ struct WaylandWindow : public PangolinGl
 
     void ProcessEvents() override;
 
-    std::unique_ptr<WaylandDisplay> display;
+//private:
+    std::shared_ptr<WaylandDisplay> display;
+
+    EGLint width, height;
+    bool is_fullscreen;
+    bool is_maximised;
+    // store floating window dimensions to restore to,
+    // when returning from maximised or fullscreen
+    int floating_width = 0, floating_height = 0;
+
+    bool pressed = false;
+    int lastx=0;
+    int lasty=0;
+
+    struct wl_surface *wsurface = nullptr;
+    struct wl_egl_window *egl_window = nullptr;
+    struct xdg_surface *xshell_surface = nullptr;
+    struct xdg_toplevel *xshell_toplevel = nullptr;
+
+    // we can only attach a buffer to a surface after it has been configured at least once
+    bool configured = false;
+
+    EGLSurface egl_surface = nullptr;
+
+    std::shared_ptr<Decoration> decoration;
 };
 
 // map wayland ids to pangolin ids
@@ -453,66 +482,91 @@ static const std::map<uint,int> wl_key_special_ids = {
     {KEY_INSERT, PANGO_KEY_INSERT},
 };
 
-#if USE_WL_XDG
-static void handle_configure_toplevel(void *data, struct xdg_toplevel */*xdg_toplevel*/, int32_t width, int32_t height, struct wl_array */*states*/) {
-#else
-static void handle_configure(void *data, struct wl_shell_surface */*shell_surface*/, uint32_t /*edges*/, int32_t width, int32_t height) {
-#endif
+static void handle_configure_toplevel(void *data, struct xdg_toplevel */*xdg_toplevel*/, int32_t width, int32_t height, struct wl_array *states) {
 
     const static uint min_width = 70;
     const static uint min_height = 70;
 
-    WaylandDisplay* const w = static_cast<WaylandDisplay*>(data);
+    WaylandWindow* const w = static_cast<WaylandWindow*>(data);
 
-    const bool provided = !(width==0 && height==0);
+    // reset window states
+    w->is_maximised = w->is_fullscreen = false;
 
-    int main_w, main_h;
-    if(provided) {
-        // use the provided dimensions
-        if(w->is_fullscreen) {
-            // without decorations
-            main_w = width;
-            main_h = height;
+    // set new window states
+    const enum xdg_toplevel_state *state;
+    WL_ARRAY_FOR_EACH(state, states, const enum xdg_toplevel_state*) {
+        switch (*state) {
+        case XDG_TOPLEVEL_STATE_MAXIMIZED:
+            w->is_maximised = true;
+            break;
+        case XDG_TOPLEVEL_STATE_FULLSCREEN:
+            w->is_fullscreen = true;
+            break;
+        default:
+            break;
         }
-        else {
-            // with decorations
-            main_w = std::max(width-int(2*w->decoration->border_size), int(min_width));
-            main_h = std::max(height-2*int(w->decoration->border_size)-int(w->decoration->title_size), int(min_height));
-        }
+    }
+
+    // set proposed dimensions, this includes the entire window with decorations
+    int restore_w = width;
+    int restore_h = height;
+
+    // restore from stored floating state if not specified
+    if (restore_w==0) restore_w = w->floating_width;
+    if (restore_h==0) restore_h = w->floating_height;
+
+    // use initially provided dimensions if floating was never set,
+    // these are in the "content" dimensions
+    if (restore_w==0) restore_w = w->width;
+    if (restore_h==0) restore_h = w->height;
+
+    if(!w->is_fullscreen && (width!=0 && height!=0)) {
+        // has decoration
+        w->decoration->toContentSize(restore_w, restore_h, w->width, w->height);
+        w->width = std::max(w->width, int(min_width));
+        w->height = std::max(w->height, int(min_height));
     }
     else {
-        // restore from saved dimensions
-        main_w = std::max((w->width)-int(2*w->decoration->border_size), int(min_width));
-        main_h = std::max((w->height)-2*int(w->decoration->border_size)-int(w->decoration->title_size), int(min_height));
+        w->width = restore_w;
+        w->height = restore_h;
     }
 
-    // resize main surface
-    wl_egl_window_resize(w->egl_window, main_w, main_h, 0, 0);
-
-    // set opaque region
-    struct wl_region* wregion = wl_compositor_create_region(w->wcompositor);
-    wl_region_add(wregion, 0, 0, main_w, main_h);
-    wl_surface_set_opaque_region(w->wsurface, wregion);
-    wl_region_destroy(wregion);
-
-    // resize all decoration elements
-    w->decoration->resize(main_w, main_h);
-
-    // notify Panglin views about resized area
-    pangolin::process::Resize(main_w, main_h);
+    // store the current state as floating state,
+    // if we are neither maximised nor fullscreen
+    if (!w->is_maximised && !w->is_fullscreen) {
+        w->floating_width = w->width;
+        w->floating_height = w->height;
+    }
 }
 
-#if USE_WL_XDG
-static void handle_configure(void */*data*/, struct xdg_surface *xdg_surface, uint32_t serial) {
+static void handle_configure(void *data, struct xdg_surface *xdg_surface, uint32_t serial) {
+    WaylandWindow* const w = static_cast<WaylandWindow*>(data);
+
+    if (w->is_fullscreen && w->decoration->visible())
+        w->decoration->destroy();
+    else if (!w->is_fullscreen && !w->decoration->visible())
+        w->decoration->create();
+
+    // resize main surface
+    wl_egl_window_resize(w->egl_window, w->width, w->height, 0, 0);
+
+    // resize all decoration elements
+    w->decoration->resize(w->width, w->height);
+
+    // notify Panglin views about resized area
+    w->ResizeSignal(WindowResizeEvent{w->width, w->height});
+
     xdg_surface_ack_configure(xdg_surface, serial);
+
+    w->configured = true;
 }
 
 static const struct xdg_surface_listener shell_surface_listener = {
     handle_configure,
 };
 
-static void handle_toplevel_close(void */*data*/, struct xdg_toplevel */*xdg_toplevel*/) {
-    pangolin::QuitAll();
+static void handle_toplevel_close(void *data, struct xdg_toplevel */*xdg_toplevel*/) {
+    static_cast<WaylandWindow*>(data)->CloseSignal();
 }
 
 static const struct xdg_toplevel_listener toplevel_listener = {
@@ -527,53 +581,43 @@ static void xdg_wm_base_ping(void */*data*/, struct xdg_wm_base *xdg_wm_base, ui
 static const struct xdg_wm_base_listener shell_listener = {
     .ping = xdg_wm_base_ping
 };
-#else
-static void handle_ping(void */*data*/, struct wl_shell_surface *shell_surface, uint32_t serial) {
-    wl_shell_surface_pong(shell_surface, serial);
-}
-
-static void handle_popup_done(void */*data*/, struct wl_shell_surface */*shell_surface*/) { }
-
-static const struct wl_shell_surface_listener shell_surface_listener = {
-    handle_ping,
-    handle_configure,
-    handle_popup_done
-};
-#endif
 
 static void pointer_handle_enter(void *data, struct wl_pointer *pointer, uint32_t serial, struct wl_surface *surface, wl_fixed_t /*sx*/, wl_fixed_t /*sy*/) {
-    WaylandDisplay* const w = static_cast<WaylandDisplay*>(data);
+    WaylandDisplay* const d = static_cast<WaylandDisplay*>(data);
+    WaylandWindow* const w = d->window;
     w->decoration->setTypeFromSurface(surface);
 
     const std::string cursor = w->decoration->getCursorForCurrentSurface();
 
-    const auto image = wl_cursor_theme_get_cursor(w->cursor_theme, cursor.c_str())->images[0];
-    wl_pointer_set_cursor(pointer, serial, w->cursor_surface, image->hotspot_x, image->hotspot_y);
-    wl_surface_attach(w->cursor_surface, wl_cursor_image_get_buffer(image), 0, 0);
-    wl_surface_damage(w->cursor_surface, 0, 0, image->width, image->height);
-    wl_surface_commit(w->cursor_surface);
+    const auto image = wl_cursor_theme_get_cursor(d->cursor_theme, cursor.c_str())->images[0];
+    wl_pointer_set_cursor(pointer, serial, d->cursor_surface, image->hotspot_x, image->hotspot_y);
+    wl_surface_attach(d->cursor_surface, wl_cursor_image_get_buffer(image), 0, 0);
+    wl_surface_damage(d->cursor_surface, 0, 0, image->width, image->height);
+    wl_surface_commit(d->cursor_surface);
 }
 
 static void pointer_handle_leave(void *data, struct wl_pointer */*pointer*/, uint32_t /*serial*/, struct wl_surface */*surface*/) {
-    WaylandDisplay* const w = static_cast<WaylandDisplay*>(data);
-    w->pressed = false;
+    WaylandDisplay* const d = static_cast<WaylandDisplay*>(data);
+    d->window->pressed = false;
 }
 
 static void pointer_handle_motion(void *data, struct wl_pointer */*pointer*/, uint32_t /*time*/, wl_fixed_t sx, wl_fixed_t sy) {
-    WaylandDisplay* const w = static_cast<WaylandDisplay*>(data);
+    WaylandDisplay* const d = static_cast<WaylandDisplay*>(data);
+    WaylandWindow* const w = d->window;
 
     w->lastx=wl_fixed_to_int(sx);
     w->lasty=wl_fixed_to_int(sy);
     if(w->pressed) {
-        pangolin::process::MouseMotion(w->lastx, w->lasty);
+        w->MouseMotionSignal(MouseMotionEvent{{float(w->lastx), float(w->lasty), d->flags}});
     }
     else {
-        pangolin::process::PassiveMouseMotion(w->lastx, w->lasty);
+        w->PassiveMouseMotionSignal(MouseMotionEvent{{float(w->lastx), float(w->lasty), d->flags}});
     }
 }
 
 static void pointer_handle_button(void *data, struct wl_pointer */*wl_pointer*/, uint32_t serial, uint32_t /*time*/, uint32_t button, uint32_t state) {
-    WaylandDisplay* const w = static_cast<WaylandDisplay*>(data);
+    WaylandDisplay* const d = static_cast<WaylandDisplay*>(data);
+    WaylandWindow* const w = d->window;
 
     if(w->decoration->last_type<0) {
         // input goes to pangoling view
@@ -581,57 +625,35 @@ static void pointer_handle_button(void *data, struct wl_pointer */*wl_pointer*/,
             return;
 
         w->pressed = (state==WL_POINTER_BUTTON_STATE_PRESSED);
-        pangolin::process::Mouse(wl_button_ids.at(button), (state==WL_POINTER_BUTTON_STATE_RELEASED), w->lastx, w->lasty);
+        w->MouseSignal(MouseEvent{{float(w->lastx), float(w->lasty), d->flags}, wl_button_ids.at(button), w->pressed});
     }
     else {
         // input goes to window decoration
         // resizing using window decoration
         if((button==BTN_LEFT) && (state==WL_POINTER_BUTTON_STATE_PRESSED)) {
             switch (w->decoration->last_type) {
-            case WL_SHELL_SURFACE_RESIZE_NONE:
-#if USE_WL_XDG
-                xdg_toplevel_move(w->xshell_toplevel, w->wseat, serial);
-#else
-                wl_shell_surface_move(w->wshell_surface, w->wseat, serial);
-#endif
+            case XDG_TOPLEVEL_RESIZE_EDGE_NONE:
+                xdg_toplevel_move(w->xshell_toplevel, d->wseat, serial);
                 break;
-            case WL_SHELL_SURFACE_RESIZE_TOP:
-            case WL_SHELL_SURFACE_RESIZE_BOTTOM:
-            case WL_SHELL_SURFACE_RESIZE_LEFT:
-            case WL_SHELL_SURFACE_RESIZE_TOP_LEFT:
-            case WL_SHELL_SURFACE_RESIZE_BOTTOM_LEFT:
-            case WL_SHELL_SURFACE_RESIZE_RIGHT:
-            case WL_SHELL_SURFACE_RESIZE_TOP_RIGHT:
-            case WL_SHELL_SURFACE_RESIZE_BOTTOM_RIGHT:
-#if USE_WL_XDG
-                xdg_toplevel_resize(w->xshell_toplevel, w->wseat, serial, w->decoration->last_type);
-#else
-                wl_shell_surface_resize(w->wshell_surface, w->wseat, serial, w->decoration->last_type);
-#endif
+            case XDG_TOPLEVEL_RESIZE_EDGE_TOP:
+            case XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM:
+            case XDG_TOPLEVEL_RESIZE_EDGE_LEFT:
+            case XDG_TOPLEVEL_RESIZE_EDGE_TOP_LEFT:
+            case XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_LEFT:
+            case XDG_TOPLEVEL_RESIZE_EDGE_RIGHT:
+            case XDG_TOPLEVEL_RESIZE_EDGE_TOP_RIGHT:
+            case XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_RIGHT:
+                xdg_toplevel_resize(w->xshell_toplevel, d->wseat, serial, w->decoration->last_type);
                 break;
             case ButtonSurface::type::CLOSE:
-                pangolin::QuitAll();
+                w->CloseSignal();
                 break;
             case ButtonSurface::type::MAXIMISE:
-                w->is_maximised = !w->is_maximised;
                 if(w->is_maximised) {
-#if USE_WL_XDG
-                    xdg_toplevel_set_maximized(w->xshell_toplevel);
-#else
-                    // store original window size
-                    wl_egl_window_get_attached_size(w->egl_window, &w->width, &w->height);
-                    wl_shell_surface_set_maximized(w->wshell_surface, nullptr);
-#endif
+                    xdg_toplevel_unset_maximized(w->xshell_toplevel);
                 }
                 else {
-#if USE_WL_XDG
-                    xdg_toplevel_unset_maximized(w->xshell_toplevel);
-#else
-                    wl_shell_surface_set_toplevel(w->wshell_surface);
-                    handle_configure(data, nullptr, 0,
-                                     w->width+2*w->decoration->border_size,
-                                     w->height+2*w->decoration->border_size+w->decoration->title_size);
-#endif
+                    xdg_toplevel_set_maximized(w->xshell_toplevel);
                 }
 
                 break;
@@ -641,17 +663,21 @@ static void pointer_handle_button(void *data, struct wl_pointer */*wl_pointer*/,
 }
 
 static void pointer_handle_axis(void *data, struct wl_pointer */*wl_pointer*/, uint32_t /*time*/, uint32_t axis, wl_fixed_t value) {
-    WaylandDisplay* const w = static_cast<WaylandDisplay*>(data);
+    WaylandDisplay* const d = static_cast<WaylandDisplay*>(data);
+    WaylandWindow* const w = d->window;
 
-    int button_id = -1;
+    const float v = wl_fixed_to_double(value);
+    float dx = 0, dy = 0;
+
     switch (axis) {
-    case REL_X: button_id = (value<0) ? 3 : 4; break;   // up, down
-    case REL_Y: button_id = (value<0) ? 5 : 6; break;   // left, right
+    case REL_X: dy = v; break;   // up, down
+    case REL_Y: dx = v; break;   // left, right
     }
 
-    if(button_id>0) {
-        pangolin::process::Mouse(button_id, 0, w->lastx, w->lasty);
-    }
+    w->SpecialInputSignal(SpecialInputEvent({
+        {float(w->lastx), float(w->lasty), d->flags},
+        InputSpecialScroll, {dx, dy, 0, 0}
+    }));
 }
 
 #if WAYLAND_VERSION_GE(1,12)
@@ -680,32 +706,47 @@ static const struct wl_pointer_listener pointer_listener = {
 #endif
 };
 
-static void keyboard_handle_keymap(void *data, struct wl_keyboard */*keyboard*/, uint32_t /*format*/, int fd, uint32_t size) {
-    WaylandDisplay* const w = static_cast<WaylandDisplay*>(data);
+static void keyboard_handle_keymap(void *data, struct wl_keyboard */*keyboard*/, uint32_t format, int fd, uint32_t size) {
+    if ((!data) || (format != WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1)) {
+        std::cerr << "wrong keymap format, got " << format << ", expected WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1" << std::endl;
+        close(fd);
+        return;
+    }
 
-    char *keymap_string = static_cast<char*>(mmap(nullptr, size, PROT_READ, MAP_SHARED, fd, 0));
-    xkb_keymap_unref(w->keymap);
-    w->keymap = xkb_keymap_new_from_string(w->xkb_context, keymap_string, XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
+    WaylandDisplay* const d = static_cast<WaylandDisplay*>(data);
+
+    char *keymap_string = static_cast<char*>(mmap(nullptr, size, PROT_READ, MAP_PRIVATE, fd, 0));
+    if (keymap_string == MAP_FAILED) {
+        std::cerr << "keymap mmap failed: " << std::string(std::strerror(errno)) << std::endl;
+        close(fd);
+        return;
+    }
+    xkb_keymap_unref(d->keymap);
+    d->keymap = xkb_keymap_new_from_string(d->xkb_context, keymap_string, XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
     munmap(keymap_string, size);
     close(fd);
-    xkb_state_unref(w->xkb_state);
-    w->xkb_state = xkb_state_new(w->keymap);
+    xkb_state_unref(d->xkb_state);
+    d->xkb_state = xkb_state_new(d->keymap);
 }
 
-static void keyboard_handle_enter(void */*data*/, struct wl_keyboard */*keyboard*/, uint32_t /*serial*/, struct wl_surface */*surface*/, struct wl_array */*keys*/) { }
+static void keyboard_handle_enter(void *data, struct wl_keyboard */*keyboard*/, uint32_t /*serial*/, struct wl_surface */*surface*/, struct wl_array */*keys*/) {
+    static_cast<WaylandDisplay*>(data)->flags = {};
+}
 
 static void keyboard_handle_leave(void */*data*/, struct wl_keyboard */*keyboard*/, uint32_t /*serial*/, struct wl_surface */*surface*/) { }
 
 static void keyboard_handle_key(void *data, struct wl_keyboard */*keyboard*/, uint32_t /*serial*/, uint32_t /*time*/, uint32_t key, uint32_t state) {
-    WaylandDisplay* const w = static_cast<WaylandDisplay*>(data);
+    WaylandDisplay* const d = static_cast<WaylandDisplay*>(data);
+    WaylandWindow* const w = d->window;
 
     // modifier keys
     if(wl_key_mod_ids.count(key)) {
         if(state==WL_KEYBOARD_KEY_STATE_PRESSED) {
-            pangolin::context->mouse_state |=  wl_key_mod_ids.at(key);
+            d->flags |= wl_key_mod_ids.at(key);
         }
         else if (state==WL_KEYBOARD_KEY_STATE_RELEASED) {
-            pangolin::context->mouse_state &= ~wl_key_mod_ids.at(key);
+            // NOTE: "d->flags &= ~wl_key_mod_ids.at(key);" does not work here
+            d->flags.set(wl_key_mod_ids.at(key), false);
         }
         return;
     }
@@ -718,7 +759,7 @@ static void keyboard_handle_key(void *data, struct wl_keyboard */*keyboard*/, ui
     }
     else {
         // character keys
-        const uint32_t utf32 = xkb_state_key_get_utf32(w->xkb_state, key+8);
+        const uint32_t utf32 = xkb_state_key_get_utf32(d->xkb_state, key+8);
         // filter non-ASCII
         if(utf32>0 && utf32<=127) {
             pango_key = int(utf32);
@@ -726,18 +767,14 @@ static void keyboard_handle_key(void *data, struct wl_keyboard */*keyboard*/, ui
     }
 
     if(pango_key>0) {
-        if(state==WL_KEYBOARD_KEY_STATE_PRESSED) {
-            pangolin::process::Keyboard(uint8_t(pango_key), w->lastx, w->lasty);
-        }else if(state==WL_KEYBOARD_KEY_STATE_RELEASED){
-            pangolin::process::KeyboardUp(uint8_t(pango_key), w->lastx, w->lasty);
-        }
+        w->KeyboardSignal(KeyboardEvent{{float(w->lastx), float(w->lasty), d->flags}, uint8_t(pango_key), state==WL_KEYBOARD_KEY_STATE_PRESSED});
     }
 }
 
 static void keyboard_handle_modifiers(void *data, struct wl_keyboard */*keyboard*/, uint32_t /*serial*/, uint32_t mods_depressed, uint32_t mods_latched, uint32_t mods_locked, uint32_t group) {
-    WaylandDisplay* const w = static_cast<WaylandDisplay*>(data);
+    WaylandDisplay* const d = static_cast<WaylandDisplay*>(data);
 
-    xkb_state_update_mask(w->xkb_state, mods_depressed, mods_latched, mods_locked, 0, 0, group);
+    xkb_state_update_mask(d->xkb_state, mods_depressed, mods_latched, mods_locked, 0, 0, group);
 }
 
 #if WAYLAND_VERSION_GE(1,12)
@@ -790,26 +827,20 @@ static void global_registry_handler(void *data, struct wl_registry *registry, ui
     WaylandDisplay* const w = static_cast<WaylandDisplay*>(data);
 
     if (strcmp(interface, wl_compositor_interface.name) == 0) {
-        w->wcompositor = reinterpret_cast<wl_compositor*> (wl_registry_bind(registry, id, &wl_compositor_interface, version));
+        w->wcompositor = reinterpret_cast<wl_compositor*> (wl_registry_bind(registry, id, &wl_compositor_interface, std::min<uint32_t>(version,4)));
     }
     else if (strcmp(interface, wl_subcompositor_interface.name) == 0) {
-        w->wsubcompositor = static_cast<wl_subcompositor*>(wl_registry_bind(registry, id, &wl_subcompositor_interface, version));
+        w->wsubcompositor = static_cast<wl_subcompositor*>(wl_registry_bind(registry, id, &wl_subcompositor_interface, std::min<uint32_t>(version,1)));
     }
-#if USE_WL_XDG
     else if (strcmp(interface, xdg_wm_base_interface.name) == 0) {
-        w->xshell = reinterpret_cast<xdg_wm_base*> (wl_registry_bind(registry, id, &xdg_wm_base_interface, version));
+        w->xshell = reinterpret_cast<xdg_wm_base*> (wl_registry_bind(registry, id, &xdg_wm_base_interface, std::min<uint32_t>(version,3)));
     }
-#else
-    else if (strcmp(interface, wl_shell_interface.name) == 0) {
-        w->wshell = reinterpret_cast<wl_shell*> (wl_registry_bind(registry, id, &wl_shell_interface, version));
-    }
-#endif
     else if (strcmp(interface, wl_seat_interface.name) == 0) {
-        w->wseat = reinterpret_cast<wl_seat*>(wl_registry_bind(registry, id, &wl_seat_interface, version));
+        w->wseat = reinterpret_cast<wl_seat*>(wl_registry_bind(registry, id, &wl_seat_interface, std::min<uint32_t>(version,5)));
         wl_seat_add_listener(w->wseat, &seat_listener, data);
     }
     else if (strcmp(interface, wl_shm_interface.name) == 0) {
-        w->shm = static_cast<wl_shm*>(wl_registry_bind(registry, id, &wl_shm_interface, version));
+        w->shm = static_cast<wl_shm*>(wl_registry_bind(registry, id, &wl_shm_interface, std::min<uint32_t>(version,1)));
         w->cursor_theme = wl_cursor_theme_load(nullptr, 16, w->shm);
     }
 }
@@ -821,9 +852,7 @@ static const struct wl_registry_listener wregistry_listener = {
     global_registry_remover
 };
 
-WaylandDisplay::WaylandDisplay(const int width, const int height, const std::string title) : width(width), height(height) {
-    xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-
+WaylandDisplay::WaylandDisplay() {
     wdisplay = wl_display_connect(nullptr);
     if (wdisplay == nullptr) {
         throw std::runtime_error("Cannot connect to Wayland compositor!");
@@ -833,6 +862,8 @@ WaylandDisplay::WaylandDisplay(const int width, const int height, const std::str
     wl_registry_add_listener(wregistry, &wregistry_listener, this);
 
     wl_display_roundtrip(wdisplay);
+
+    xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
 
     egl_display = eglGetDisplay((EGLNativeDisplayType)wdisplay);
     if(!egl_display) {
@@ -858,124 +889,119 @@ WaylandDisplay::WaylandDisplay(const int width, const int height, const std::str
 
     egl_context = eglCreateContext(egl_display, egl_configs[0], EGL_NO_CONTEXT, nullptr);
 
-    wsurface = wl_compositor_create_surface(wcompositor);
+    if(xshell==nullptr) {
+        throw std::runtime_error("No Wayland shell available!");
+    }
 
-    egl_window = wl_egl_window_create(wsurface, width, height);
+    xdg_wm_base_add_listener(xshell, &shell_listener, this);
+
+    wl_display_roundtrip(wdisplay);
+}
+
+WaylandDisplay::~WaylandDisplay() {
+    // cleanup EGL
+    if(egl_context) eglDestroyContext(egl_display, egl_context);
+    if(egl_display) eglTerminate(egl_display);
+
+    // cleanup Wayland
+    if(wkeyboard)       wl_keyboard_destroy(wkeyboard);
+    if(pointer)         wl_pointer_destroy(pointer);
+    if(cursor_surface)  wl_surface_destroy(cursor_surface);
+    if(cursor_theme)    wl_cursor_theme_destroy(cursor_theme);
+    if(shm)             wl_shm_destroy(shm);
+    if(wseat)           wl_seat_destroy(wseat);
+    if(xshell)          xdg_wm_base_destroy(xshell);
+    if(wsubcompositor)  wl_subcompositor_destroy(wsubcompositor);
+    if(wcompositor)     wl_compositor_destroy(wcompositor);
+    if(wregistry)       wl_registry_destroy(wregistry);
+    if(wdisplay)        wl_display_disconnect(wdisplay);
+
+    if(xkb_context) xkb_context_unref(xkb_context);
+    if(xkb_state)   xkb_state_unref(xkb_state);
+    if(keymap)      xkb_keymap_unref(keymap);
+}
+
+WaylandWindow::WaylandWindow(const int w, const int h,
+                             const std::string& title,
+                             std::shared_ptr<WaylandDisplay> display)
+    : display(display)
+{
+    wsurface = wl_compositor_create_surface(display->wcompositor);
+
+    display->window = this;
+
+    width = w;
+    height = h;
+
+    egl_window = wl_egl_window_create(wsurface, w, h);
     if(!egl_window) {
         std::cerr << "Cannot create EGL window" << std::endl;
     }
 
-    egl_surface = eglCreateWindowSurface(egl_display, egl_configs[0], (EGLNativeWindowType)egl_window, nullptr);
+    egl_surface = eglCreateWindowSurface(display->egl_display, display->egl_configs[0], (EGLNativeWindowType)egl_window, nullptr);
     if (egl_surface == EGL_NO_SURFACE) {
         std::cerr << "Cannot create EGL surface" << std::endl;
     }
 
-    if(
-#if USE_WL_XDG
-    xshell
-#else
-    wshell
-#endif
-    ==nullptr) {
-        throw std::runtime_error("No Wayland shell available!");
-    }
-
-#if USE_WL_XDG
-    xdg_wm_base_add_listener(xshell, &shell_listener, this);
-    xshell_surface = xdg_wm_base_get_xdg_surface(xshell, wsurface);
+    xshell_surface = xdg_wm_base_get_xdg_surface(display->xshell, wsurface);
     xdg_surface_add_listener(xshell_surface, &shell_surface_listener, this);
     xshell_toplevel = xdg_surface_get_toplevel(xshell_surface);
     xdg_toplevel_add_listener(xshell_toplevel, &toplevel_listener, this);
     xdg_toplevel_set_title(xshell_toplevel, title.c_str());
     xdg_toplevel_set_app_id(xshell_toplevel, title.c_str());
-#else
-    wshell_surface = wl_shell_get_shell_surface(wshell, wsurface);
-    wl_shell_surface_add_listener(wshell_surface, &shell_surface_listener, this);
-    wl_shell_surface_set_toplevel(wshell_surface);
-    wl_shell_surface_set_title(wshell_surface, title.c_str());
-    wl_shell_surface_set_class(wshell_surface, title.c_str());
-#endif
-
-    wl_display_sync(wdisplay);
 
     // construct window decoration
-    const pangolin::Colour grey(0.5f, 0.5f, 0.5f, 0.5f);
-    decoration = std::unique_ptr<Decoration>(new Decoration(5, 20, grey, wcompositor, wsubcompositor, wsurface, egl_display, egl_configs[0]));
+    const pangolin::Colour grey(0.5f, 0.5f, 0.5f);
+    decoration = std::unique_ptr<Decoration>(new Decoration(5, 20, grey, display->wcompositor, display->wsubcompositor, wsurface, display->egl_display, display->egl_configs[0]));
     decoration->create();
     decoration->resize(width, height);
+
+    wl_surface_commit(wsurface);
+
+    wl_display_roundtrip(display->wdisplay);
+    wl_display_roundtrip(display->wdisplay);
+
+    // wait for the first configure event
+    while (!configured) {
+        wl_display_dispatch(display->wdisplay);
+    }
 }
 
-WaylandDisplay::~WaylandDisplay() {
+WaylandWindow::~WaylandWindow() {
     if(decoration)  decoration->destroy();
 
     // cleanup EGL
-    if(egl_context) eglDestroyContext(egl_display, egl_context);
-    if(egl_surface) eglDestroySurface(egl_display, egl_surface);
+    if(egl_surface) eglDestroySurface(display->egl_display, egl_surface);
     if(egl_window)  wl_egl_window_destroy(egl_window);
-    if(egl_display) eglTerminate(egl_display);
 
     // cleanup Wayland
-#if USE_WL_XDG
     if(xshell_surface)  xdg_surface_destroy(xshell_surface);
     if(xshell_toplevel) xdg_toplevel_destroy(xshell_toplevel);
-    if(xshell)          xdg_wm_base_destroy(xshell);
-#else
-    if(wshell_surface)  wl_shell_surface_destroy(wshell_surface);
-    if(wshell)          wl_shell_destroy(wshell);
-#endif
 
     if(wsurface)        wl_surface_destroy(wsurface);
-    if(wregistry)       wl_registry_destroy(wregistry);
-    if(wdisplay)        wl_display_disconnect(wdisplay);
-
-    if(xkb_context) xkb_context_unref(xkb_context);
 }
-
-WaylandWindow::WaylandWindow(const int w, const int h, std::unique_ptr<WaylandDisplay> display) : display(std::move(display)){
-    windowed_size[0] = w;
-    windowed_size[1] = h;
-}
-
-WaylandWindow::~WaylandWindow() { }
 
 void WaylandWindow::MakeCurrent() {
-    eglMakeCurrent(display->egl_display, display->egl_surface, display->egl_surface, display->egl_context);
-    context = this;
+    eglMakeCurrent(display->egl_display, egl_surface, egl_surface, display->egl_context);
 }
 
 void WaylandWindow::RemoveCurrent() {
     eglMakeCurrent(display->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
 }
 
-void WaylandWindow::ToggleFullscreen() {
-    is_fullscreen = !is_fullscreen;         // state for Pangolin
-    display->is_fullscreen = is_fullscreen; // state for Wayland
-    if(is_fullscreen) {
-        display->decoration->destroy();
-#if USE_WL_XDG
-        xdg_toplevel_set_fullscreen(display->xshell_toplevel, nullptr);
-#else
-        wl_shell_surface_set_fullscreen(display->wshell_surface, WL_SHELL_SURFACE_FULLSCREEN_METHOD_DEFAULT, 0, nullptr);
-#endif
-    }
-    else {
-        display->decoration->create();
-#if USE_WL_XDG
-        xdg_toplevel_unset_fullscreen(display->xshell_toplevel);
-#else
-        wl_shell_surface_set_toplevel(display->wshell_surface);
-#endif
-
-#if !USE_WL_XDG
-        if(display->is_maximised) {
-            wl_shell_surface_set_maximized(display->wshell_surface, nullptr);
-        }
-        else {
-            handle_configure(static_cast<void*>(display.get()), nullptr, 0,
-                             windowed_size[0]+2*display->decoration->border_size,
-                             windowed_size[1]+2*display->decoration->border_size+display->decoration->title_size);
-        }
-#endif
+void WaylandWindow::ShowFullscreen(const TrueFalseToggle on_off) {
+    switch (on_off) {
+    case TrueFalseToggle::False:
+        decoration->create();
+        xdg_toplevel_unset_fullscreen(xshell_toplevel);
+        break;
+    case TrueFalseToggle::True:
+        decoration->destroy();
+        xdg_toplevel_set_fullscreen(xshell_toplevel, nullptr);
+        break;
+    case TrueFalseToggle::Toggle:
+        ShowFullscreen(TrueFalseToggle(!is_fullscreen));
+        break;
     }
 
     wl_display_sync(display->wdisplay);
@@ -988,29 +1014,21 @@ void WaylandWindow::Resize(const unsigned int /*w*/, const unsigned int /*h*/) {
 void WaylandWindow::ProcessEvents() { }
 
 void WaylandWindow::SwapBuffers() {
-    eglSwapBuffers(display->egl_display, display->egl_surface);
+    eglSwapBuffers(display->egl_display, egl_surface);
 
     // draw all decoration elements
-    display->decoration->draw();
+    decoration->draw();
 
     MakeCurrent();
 
-    wl_display_roundtrip(display->wdisplay);
+    wl_display_dispatch(display->wdisplay);
 }
 
 
 std::unique_ptr<WindowInterface> CreateWaylandWindowAndBind(const std::string window_title, const int w, const int h, const std::string /*display_name*/, const bool /*double_buffered*/, const int /*sample_buffers*/, const int /*samples*/) {
 
     try{
-        std::unique_ptr<WaylandDisplay> newdisplay = std::unique_ptr<WaylandDisplay>(new WaylandDisplay(w, h, window_title));
-
-        // glewInit() fails with SIGSEGV for glew < 2.0 since it links to GLX
-        if(atoi((char*)glewGetString(GLEW_VERSION_MAJOR))<2)
-            return nullptr;
-
-        WaylandWindow* win = new WaylandWindow(w, h, std::move(newdisplay));
-
-        return std::unique_ptr<WindowInterface>(win);
+        return std::make_unique<WaylandWindow>(w, h, window_title, std::make_shared<WaylandDisplay>());
     }
     catch(const std::runtime_error&) {
         // return null pointer for fallback to X11
@@ -1023,6 +1041,30 @@ std::unique_ptr<WindowInterface> CreateWaylandWindowAndBind(const std::string wi
 PANGOLIN_REGISTER_FACTORY(WaylandWindow)
 {
   struct WaylandWindowFactory : public TypedFactoryInterface<WindowInterface> {
+    std::map<std::string,Precedence> Schemes() const override
+    {
+      return {{"wayland",10}, {"linux",9}, {"default",90}};
+    }
+
+    const char* Description() const override
+    {
+      return "Use X11 native window";
+    }
+
+    ParamSet Params() const override
+    {
+      return {{
+          {"window_title","window","Title of application Window"},
+          {"w","640","Requested window width"},
+          {"h","480","Requested window height"},
+          {"display_name","","The display name to open the window on"},
+          {"double_buffered","true","Whether the window should be double buffered"},
+          {"sample_buffers","1",""},
+          {"samples","1",""},
+          {PARAM_GL_PROFILE,"Ignored for now"},
+      }};
+    }
+
     std::unique_ptr<WindowInterface> Open(const Uri& uri) override {
 
       const std::string window_title = uri.Get<std::string>("window_title", "window");
@@ -1038,11 +1080,7 @@ PANGOLIN_REGISTER_FACTORY(WaylandWindow)
     virtual ~WaylandWindowFactory() { }
   };
 
-    auto factory = std::make_shared<WaylandWindowFactory>();
-    FactoryRegistry<WindowInterface>::I().RegisterFactory(factory, 10, "wayland");
-    FactoryRegistry<WindowInterface>::I().RegisterFactory(factory, 9,  "linux");
-    FactoryRegistry<WindowInterface>::I().RegisterFactory(factory, 90,  "default");
+    return FactoryRegistry::I()->RegisterFactory<WindowInterface>(std::make_shared<WaylandWindowFactory>());
 }
 
 } // namespace pangolin
-

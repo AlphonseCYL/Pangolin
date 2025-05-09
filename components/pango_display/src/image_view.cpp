@@ -1,6 +1,7 @@
 #include <pangolin/display/image_view.h>
 #include <pangolin/image/image_utils.h>
 #include <pangolin/image/image_convert.h>
+#include <pangolin/gl/glsl_utilities.h>
 
 namespace pangolin
 {
@@ -184,7 +185,7 @@ ImageView& ImageView::SetImage(const pangolin::GlTexture& texture)
         tex.Reinitialise(texture.width, texture.height, texture.internal_format, true);
     }
 
-    glCopyImageSubDataNV(
+    glCopyImageSubData(
             texture.tid, GL_TEXTURE_2D, 0, 0, 0, 0, tex.tid, GL_TEXTURE_2D, 0, 0, 0, 0, tex.width, tex.height, 1);
 
     return *this;

@@ -25,13 +25,14 @@ PRIVATE
     ${DRIVER_DIR}/merge.cpp
     ${DRIVER_DIR}/json.cpp
     ${DRIVER_DIR}/thread.cpp
+    ${DRIVER_DIR}/mjpeg.cpp
 )
 
 PangolinRegisterFactory(
     VideoInterface
     TestVideo ImagesVideo SplitVideo TruncateVideo PangoVideo
     DebayerVideo ShiftVideo TransformVideo UnpackVideo PackVideo
-    JoinVideo MergeVideo JsonVideo
+    JoinVideo MergeVideo JsonVideo MjpegVideo
 )
 
 PangolinRegisterFactory(
@@ -79,13 +80,14 @@ if(BUILD_PANGOLIN_FFMPEG)
       )
       target_link_libraries(${COMPONENT} PRIVATE ${FFMPEG_LIBRARIES} )
       target_include_directories(${COMPONENT} PRIVATE ${FFMPEG_INCLUDE_DIRS} )
+      PangolinRegisterFactory( VideoInterface FfmpegVideo)
       PangolinRegisterFactory( VideoInterface FfmpegVideo FfmpegVideoConvert)
       PangolinRegisterFactory( VideoOutputInterface FfmpegVideoOutput)
       if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         # FFMPEG is a real pain for deprecating the API.
         set_source_files_properties(${DRIVER_DIR}/ffmpeg.cpp  PROPERTIES COMPILE_FLAGS "-Wno-deprecated-declarations")
       endif()
-      message(STATUS "ffmpeg Found and Enabled")
+      message(STATUS "ffmpeg Found and Enabled: ${FFMPEG_INCLUDE_DIRS}")
   endif()
 endif()
 
@@ -213,16 +215,31 @@ endif()
 
 #########################################################
 
-target_include_directories(${COMPONENT}
-    PUBLIC "${CMAKE_CURRENT_LIST_DIR}/include"
-    PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/include"
+set_target_properties(
+    ${COMPONENT} PROPERTIES VERSION ${PANGOLIN_VERSION} SOVERSION ${PANGOLIN_VERSION_MAJOR}
 )
 
 target_link_libraries(${COMPONENT} PUBLIC pango_core pango_image pango_packetstream)
+target_include_directories(${COMPONENT} PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+)
+install(DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/include" DESTINATION ${CMAKE_INSTALL_PREFIX})
+install(DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/include" DESTINATION ${CMAKE_INSTALL_PREFIX})
+
+# Create RegisterFactoriesVideoInterface() method call file to load built drivers and add as source
+create_factory_registry_file( "${CMAKE_CURRENT_BINARY_DIR}/include/pangolin/factory" VideoInterface )
+create_factory_registry_file( "${CMAKE_CURRENT_BINARY_DIR}/include/pangolin/factory" VideoOutputInterface )
+target_sources(${COMPONENT} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/include/pangolin/factory/RegisterFactoriesVideoInterface.h")
+target_sources(${COMPONENT} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/include/pangolin/factory/RegisterFactoriesVideoOutputInterface.h")
 
 
-find_package(Catch2 2 QUIET)
-if(Catch2_FOUND)
+if(BUILD_TESTS)
     add_executable(test_video_uris ${CMAKE_CURRENT_LIST_DIR}/tests/tests_video_uri.cpp)
-    target_link_libraries(test_video_uris PRIVATE Catch2::Catch2 ${COMPONENT})
+    target_link_libraries(test_video_uris PRIVATE Catch2::Catch2WithMain ${COMPONENT})
+    catch_discover_tests(test_video_uris)
+    add_executable(test_video_loading ${CMAKE_CURRENT_LIST_DIR}/tests/tests_video_loading.cpp)
+    target_link_libraries(test_video_loading PRIVATE Catch2::Catch2WithMain ${COMPONENT})
+    catch_discover_tests(test_video_loading)
 endif()

@@ -1,7 +1,8 @@
 #pragma once
 
-#include <string>
 #include <cstdint>
+#include <string>
+#include <stdint.h>
 
 namespace pangolin {
 

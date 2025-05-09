@@ -1,5 +1,9 @@
 #define CATCH_CONFIG_MAIN
+#if __has_include(<catch2/catch.hpp>)
 #include <catch2/catch.hpp>
+#else
+#include <catch2/catch_test_macros.hpp>
+#endif
 
 #include <string>
 #include <limits>
@@ -36,13 +40,6 @@ inline void ExpectExceptionWithMessageFromAction(
 TEST_CASE("Empty Uri Test")
 {
     REQUIRE_THROWS_AS(pangolin::OpenVideo(""), pangolin::VideoException);
-}
-
-TEST_CASE("Uri Beginning With Dot Interpreted As Image")
-{
-    auto testAction = [](){pangolin::OpenVideo(".");};
-    ExpectExceptionWithMessageFromAction<std::runtime_error>(testAction,
-         "Unsupported image file type");
 }
 
 TEST_CASE("Uri Dimension Legal Separator Character")

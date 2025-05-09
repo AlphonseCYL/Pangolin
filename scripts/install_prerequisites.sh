@@ -3,7 +3,7 @@
 # exit when any command fails
 set -e
 
-MANAGERS=(dnf apt-get port vcpkg brew)
+MANAGERS=(dnf apt port vcpkg brew pacman)
 MANAGER=""
 LIST=0
 VERBOSE=0
@@ -40,7 +40,7 @@ while (( "$#" )); do
       ;;
     -m|--package-manager)
       if [ -n "$2" ] && [ ${2:0:1} != "-" ]; then
-        MANAGERS=($2)
+        MANAGER=($2)
         shift 2
       else
         echo "Error: Argument for $1 is missing" >&2
@@ -92,15 +92,18 @@ case "$PARAMS" in
     ;;
 esac
 
-
 # Find an available package manager from the preferred list
-for m in ${MANAGERS[@]}
-do
-    if [ -x "$(command -v $m)" ]; then
-        MANAGER="$m"
-        break
-    fi
-done
+# if one has not already been selected manually.
+if [ -z "$MANAGER" ]
+then
+  for m in ${MANAGERS[@]}
+  do
+      if [ -x "$(command -v $m)" ]; then
+          MANAGER="$m"
+          break
+      fi
+  done
+fi
 
 # If no package manager is found, exit
 if [ -z "$MANAGER" ]
@@ -111,42 +114,52 @@ fi
 if ((VERBOSE > 0)); then echo "Using \"$MANAGER\" package manager (select another using -m)"; fi
 
 # Setup prereq commands and packages.
-if [[ "$MANAGER" == "apt-get" ]]; then
+if [[ "$MANAGER" == "apt" ]]; then
     SUDO="sudo"
-    PKGS_UPDATE="apt-get update"
+    PKGS_UPDATE="apt update"
     PKGS_OPTIONS+=(install --no-install-suggests --no-install-recommends)
-    if ((DRYRUN > 0));  then PKGS_OPTIONS+=(--dry-run); fi
-    if ((VERBOSE == 0)); then PKGS_OPTIONS+=(--qq); fi
+    if ((DRYRUN > 0));  then PKGS_OPTIONS+=(--dry-run); SUDO=""; fi
     PKGS_REQUIRED+=(libgl1-mesa-dev libwayland-dev libxkbcommon-dev wayland-protocols libegl1-mesa-dev)
-    PKGS_REQUIRED+=(libc++-dev libglew-dev libeigen3-dev cmake)
-    PKGS_RECOMMENDED+=(libjpeg-dev libpng-dev)
+    PKGS_REQUIRED+=(libc++-dev libepoxy-dev libglew-dev libeigen3-dev cmake g++ ninja-build)
+    PKGS_RECOMMENDED+=(libjpeg-dev libpng-dev catch2)
     PKGS_RECOMMENDED+=(libavcodec-dev libavutil-dev libavformat-dev libswscale-dev libavdevice-dev)
-    PKGS_ALL+=(libdc1394-22-dev libraw1394-dev libopenni-dev)
+    PKGS_ALL+=(libdc1394-dev libraw1394-dev libopenni-dev python3-dev)
 elif [[ "$MANAGER" == "dnf" ]]; then
     SUDO="sudo"
     PKGS_UPDATE="dnf check-update"
     PKGS_OPTIONS+=(install)
-    PKGS_REQUIRED+=(wayland-devel libxkbcommon-devel)
-    PKGS_REQUIRED+=(glew-devel eigen3 cmake)
-    PKGS_RECOMMENDED+=(libjpeg-devel libpng-devel OpenEXR-devel)
-    PKGS_ALL+=(libdc1394-22-devel libraw1394-devel librealsense-devel openni-devel)
+    PKGS_REQUIRED+=(wayland-devel libxkbcommon-devel g++ ninja-build)
+    PKGS_REQUIRED+=(epoxy-devel eigen3 cmake)
+    PKGS_RECOMMENDED+=(libjpeg-devel libpng-devel OpenEXR-devel catch2)
+    PKGS_ALL+=(libdc1394-devel libraw1394-devel librealsense-devel openni-devel)
     if ((DRYRUN > 0));  then
         MANAGER="echo $MANAGER"
+        SUDO=""
+    fi
+elif [[ "$MANAGER" == "pacman" ]]; then
+    SUDO="sudo"
+    PKGS_UPDATE=""  # databases and packages are updated in -Syu install options
+    PKGS_OPTIONS+=(-Syu)
+    PKGS_REQUIRED+=(mesa wayland libxkbcommon wayland-protocols libc++ glew eigen cmake gcc ninja)
+    PKGS_RECOMMENDED+=(libjpeg-turbo libpng ffmpeg)
+    PKGS_ALL+=(libdc1394 libraw1394 openni python3)
+    if ((DRYRUN > 0));  then
+        MANAGER="echo $MANAGER"
+        SUDO=""
     fi
 elif [[ "$MANAGER" == "port" ]]; then
     SUDO="sudo"
     PKGS_UPDATE="port sync -q"
+    if ((DRYRUN > 0));  then PKGS_OPTIONS+=(-y); SUDO=""; fi
     PKGS_OPTIONS+=(-N install -q)
-    if ((DRYRUN > 0));  then PKGS_OPTIONS+=(-y); fi
-    if ((VERBOSE == 0)); then PKGS_OPTIONS+=(--q); fi
-    PKGS_REQUIRED+=(glew eigen3-devel cmake +gui)
-    PKGS_RECOMMENDED+=(jpeg libpng openexr tiff ffmpeg-devel lz4 zstd py37-pybind11)
+    PKGS_REQUIRED+=(glew eigen3-devel cmake +gui ninja)
+    PKGS_RECOMMENDED+=(libjpeg-turbo libpng openexr tiff ffmpeg-devel lz4 zstd py37-pybind11 catch2)
     PKGS_ALL+=(libdc1394 openni)
 elif [[ "$MANAGER" == "brew" ]]; then
     PKGS_OPTIONS+=(install)
     if ((VERBOSE > 0)); then PKGS_OPTIONS+=(--verbose); fi
-    PKGS_REQUIRED+=(glew eigen cmake)
-    PKGS_RECOMMENDED+=(libjpeg libpng)
+    PKGS_REQUIRED+=(glew eigen cmake ninja)
+    PKGS_RECOMMENDED+=(libjpeg-turbo libpng openexr libtiff ffmpeg lz4 zstd catch2)
     # Brew doesn't have a dryrun option
     if ((DRYRUN > 0));  then
         MANAGER="echo $MANAGER"
@@ -155,8 +168,8 @@ elif [[ "$MANAGER" == "vcpkg" ]]; then
     # TODO: this should be a config option somehow...
     PKGS_OPTIONS+=(install --triplet=x64-windows )
     if ((DRYRUN > 0));  then PKGS_OPTIONS+=(--dry-run); fi
-    PKGS_REQUIRED+=(glew eigen3)
-    PKGS_RECOMMENDED+=(libjpeg-turbo libpng openexr tiff ffmpeg lz4 zstd)
+    PKGS_REQUIRED+=(glew eigen3 vcpkg-tool-ninja)
+    PKGS_RECOMMENDED+=(libjpeg-turbo libpng openexr tiff ffmpeg lz4 zstd python3 Catch2)
     PKGS_ALL+=(openni2 realsense2)
 else
     echo "Error: Don't know how to use \"$MANAGER\", please fix the script." >&2

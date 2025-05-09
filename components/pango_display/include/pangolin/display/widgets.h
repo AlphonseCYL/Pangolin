@@ -46,7 +46,14 @@ struct PANGOLIN_EXPORT Panel : public View
     Panel(const std::string& auto_register_var_prefix);
     void Render();
     void ResizeChildren();
-    static void AddVariable(void* data, const std::string& name, const std::shared_ptr<VarValueGeneric> &var, bool brand_new);
+
+private:
+    void NewVarCallback(const VarState::Event& e);
+    void AddVariable(const std::string& name, const std::shared_ptr<VarValueGeneric> &var);
+    void RemoveVariable(const std::string& name);
+
+    sigslot::scoped_connection var_added_connection;
+    std::string auto_register_var_prefix;
 };
 
 template<typename T>
@@ -130,12 +137,25 @@ struct PANGOLIN_EXPORT TextInput : public Widget<std::string>
 
     //Cache params on resize
     void ResizeChildren();
+    void CalcVisibleEditPart();
     GlText gltext;
-    GLfloat raster[2];
     bool can_edit;
     bool do_edit;
     int sel[2];
+    GLfloat vertical_margin;
+    GLfloat horizontal_margin = 2.f;
+    int input_width;
+    int edit_visible_part[2] = {0,1};
 };
 
+
+inline bool GuiVarHasChanged() {
+    Var<bool> changed("pango.widgets.gui_changed");
+    return bool(changed) && !(changed = false);
+}
+
+inline void FlagVarChanged() {
+    Var<bool>("pango.widgets.gui_changed") = true;
+}
 
 }

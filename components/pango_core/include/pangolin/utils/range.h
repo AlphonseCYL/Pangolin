@@ -40,7 +40,7 @@
 
 #ifdef USE_EIGEN
 #  include <Eigen/Core>
-#  include <Eigen/src/Geometry/AlignedBox.h>
+#  include <Eigen/Geometry>
 #endif // USE_EIGEN
 
 namespace pangolin
@@ -66,8 +66,8 @@ struct Range
     }
 
     Range()
-        : min(+std::numeric_limits<T>::max()),
-          max(-std::numeric_limits<T>::max())
+        : min(std::numeric_limits<T>::max()),
+          max(std::numeric_limits<T>::lowest())
     {
     }
 
@@ -207,7 +207,23 @@ struct Range
     template<typename To>
     Range<To> Cast() const
     {
-        return Range<To>(To(min), To(max));
+        To clampedMin, clampedMax;
+
+        if (min == std::numeric_limits<T>::lowest()){
+          clampedMin = std::numeric_limits<To>::lowest();
+        }
+        else {
+          clampedMin = To(min);
+        }
+
+        if (max == std::numeric_limits<T>::max()){
+          clampedMax = std::numeric_limits<To>::max();
+        }
+        else {
+          clampedMax = To(max);
+        }
+
+        return Range<To>(clampedMin, clampedMax);
     }
 
     T min;

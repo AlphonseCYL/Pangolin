@@ -33,6 +33,7 @@
 #include <pangolin/utils/type_convert.h>
 #include <algorithm>
 #include <stdexcept>
+#include <assert.h>
 
 namespace pangolin
 {
@@ -224,7 +225,20 @@ inline void GlTexture::Upload(
 inline void GlTexture::Load(const TypedImage& image, bool sampling_linear)
 {
     GlPixFormat fmt(image.fmt);
-    Reinitialise((GLint)image.w, (GLint)image.h, GL_RGBA32F, sampling_linear, 0, fmt.glformat, fmt.gltype, image.ptr );
+    Reinitialise((GLint)image.w, (GLint)image.h, fmt.scalable_internal_format, sampling_linear, 0, fmt.glformat, fmt.gltype, image.ptr );
+}
+
+template<typename T>
+void GlTexture::Load(const Image<T>& image, bool sampling_linear)
+{
+    using GlFmt = GlFormatTraits<T>;
+
+    Reinitialise(
+        (GLint)image.w, (GLint)image.h,
+        GlFmt::glinternalformat,
+        sampling_linear, 0,
+        GlFmt::glformat, GlFmt::gltype,
+        image.ptr);
 }
 
 inline void GlTexture::LoadFromFile(const std::string& filename, bool sampling_linear)
@@ -510,16 +524,16 @@ inline void GlRenderBuffer::Reinitialise(GLint width, GLint height, GLint intern
 
     this->width = width;
     this->height = height;
-    glGenRenderbuffersEXT(1, &rbid);
-    glBindRenderbufferEXT(GL_RENDERBUFFER_EXT, rbid);
-    glRenderbufferStorageEXT(GL_RENDERBUFFER_EXT, internal_format, width, height);
-    glBindRenderbufferEXT(GL_RENDERBUFFER_EXT, 0);
+    glGenRenderbuffers(1, &rbid);
+    glBindRenderbuffer(GL_RENDERBUFFER_EXT, rbid);
+    glRenderbufferStorage(GL_RENDERBUFFER_EXT, internal_format, width, height);
+    glBindRenderbuffer(GL_RENDERBUFFER_EXT, 0);
 }
 
 inline GlRenderBuffer::~GlRenderBuffer()
 {
     if( width!=0 ) {
-        glDeleteRenderbuffersEXT(1, &rbid);
+        glDeleteRenderbuffers(1, &rbid);
     }
 }
 #else
@@ -568,14 +582,22 @@ inline GlFramebuffer::GlFramebuffer()
 inline GlFramebuffer::~GlFramebuffer()
 {
     if(fbid) {
-        glDeleteFramebuffersEXT(1, &fbid);
+        glDeleteFramebuffers(1, &fbid);
     }
+}
+
+inline GlFramebuffer::GlFramebuffer(GlTexture& colour)
+    : attachments(0)
+{
+    glGenFramebuffers(1, &fbid);
+    AttachColour(colour);
+    CheckGlDieOnError();
 }
 
 inline GlFramebuffer::GlFramebuffer(GlTexture& colour, GlRenderBuffer& depth)
     : attachments(0)
 {
-    glGenFramebuffersEXT(1, &fbid);
+    glGenFramebuffers(1, &fbid);
     AttachColour(colour);
     AttachDepth(depth);
     CheckGlDieOnError();
@@ -584,7 +606,7 @@ inline GlFramebuffer::GlFramebuffer(GlTexture& colour, GlRenderBuffer& depth)
 inline GlFramebuffer::GlFramebuffer(GlTexture& colour0, GlTexture& colour1, GlRenderBuffer& depth)
     : attachments(0)
 {
-    glGenFramebuffersEXT(1, &fbid);
+    glGenFramebuffers(1, &fbid);
     AttachColour(colour0);
     AttachColour(colour1);
     AttachDepth(depth);
@@ -594,7 +616,7 @@ inline GlFramebuffer::GlFramebuffer(GlTexture& colour0, GlTexture& colour1, GlRe
 inline GlFramebuffer::GlFramebuffer(GlTexture& colour0, GlTexture& colour1, GlTexture& colour2, GlRenderBuffer& depth)
     : attachments(0)
 {
-    glGenFramebuffersEXT(1, &fbid);
+    glGenFramebuffers(1, &fbid);
     AttachColour(colour0);
     AttachColour(colour1);
     AttachColour(colour2);
@@ -605,7 +627,7 @@ inline GlFramebuffer::GlFramebuffer(GlTexture& colour0, GlTexture& colour1, GlTe
 inline GlFramebuffer::GlFramebuffer(GlTexture& colour0, GlTexture& colour1, GlTexture& colour2, GlTexture& colour3, GlRenderBuffer& depth)
     : attachments(0)
 {
-    glGenFramebuffersEXT(1, &fbid);
+    glGenFramebuffers(1, &fbid);
     AttachColour(colour0);
     AttachColour(colour1);
     AttachColour(colour2);
@@ -616,22 +638,22 @@ inline GlFramebuffer::GlFramebuffer(GlTexture& colour0, GlTexture& colour1, GlTe
 
 inline void GlFramebuffer::Bind() const
 {
-    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, fbid);
+    glBindFramebuffer(GL_FRAMEBUFFER_EXT, fbid);
     glDrawBuffers( attachments, attachment_buffers );
 }
 
 inline void GlFramebuffer::Reinitialise()
 {
     if(fbid) {
-        glDeleteFramebuffersEXT(1, &fbid);
+        glDeleteFramebuffers(1, &fbid);
     }
-    glGenFramebuffersEXT(1, &fbid);
+    glGenFramebuffers(1, &fbid);
 }
 
 inline void GlFramebuffer::Unbind() const
 {
     glDrawBuffers( 1, attachment_buffers );
-    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER_EXT, 0);
 }
 
 inline GLenum GlFramebuffer::AttachColour(GlTexture& tex )
@@ -639,9 +661,9 @@ inline GLenum GlFramebuffer::AttachColour(GlTexture& tex )
     if(!fbid) Reinitialise();
 
     const GLenum color_attachment = GL_COLOR_ATTACHMENT0_EXT + attachments;
-    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, fbid);
-    glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT, color_attachment, GL_TEXTURE_2D, tex.tid, 0);
-    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER_EXT, fbid);
+    glFramebufferTexture2D(GL_FRAMEBUFFER_EXT, color_attachment, GL_TEXTURE_2D, tex.tid, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER_EXT, 0);
     attachments++;
     CheckGlDieOnError();
     return color_attachment;
@@ -651,15 +673,15 @@ inline void GlFramebuffer::AttachDepth(GlRenderBuffer& rb )
 {
     if(!fbid) Reinitialise();
 
-    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, fbid);
+    glBindFramebuffer(GL_FRAMEBUFFER_EXT, fbid);
 #if !defined(HAVE_GLES)
-    glFramebufferRenderbufferEXT(GL_FRAMEBUFFER_EXT, GL_DEPTH_ATTACHMENT_EXT, GL_RENDERBUFFER_EXT, rb.rbid);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER_EXT, GL_DEPTH_ATTACHMENT_EXT, GL_RENDERBUFFER_EXT, rb.rbid);
 #elif defined(HAVE_GLES_2)
     glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT, GL_DEPTH_ATTACHMENT_EXT, GL_TEXTURE_2D, rb.rbid, 0);
 #else
     throw std::exception();
 #endif
-    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER_EXT, 0);
     CheckGlDieOnError();
 }
 
@@ -670,10 +692,17 @@ inline GlBufferData::GlBufferData()
 {
 }
 
-inline GlBufferData::GlBufferData(GlBufferType buffer_type, GLuint size_bytes, GLenum gluse, const unsigned char* data )
+inline GlBufferData::GlBufferData(GlBufferType buffer_type, GLsizeiptr size_bytes, GLenum gluse, const void* data )
     : bo(0)
 {
     Reinitialise(buffer_type, size_bytes, gluse, data );
+}
+
+template<typename T>
+GlBufferData::GlBufferData(GlBufferType buffer_type, const std::vector<T>& data, GLenum gluse)
+    : bo(0)
+{
+    Reinitialise(buffer_type, data.size()*sizeof(T), gluse, &data[0]);
 }
 
 //! Move Constructor
@@ -682,6 +711,7 @@ inline GlBufferData::GlBufferData(GlBufferData&& tex)
 {
     *this = std::move(tex);
 }
+
 inline GlBufferData& GlBufferData::operator=(GlBufferData&& tex)
 {
     Free();
@@ -710,12 +740,12 @@ inline bool GlBufferData::IsValid() const
     return bo != 0;
 }
 
-inline size_t GlBufferData::SizeBytes() const
+inline GLsizeiptr GlBufferData::SizeBytes() const
 {
     return size_bytes;
 }
 
-inline void GlBufferData::Reinitialise(GlBufferType buffer_type, GLuint size_bytes, GLenum gluse, const unsigned char* data )
+inline void GlBufferData::Reinitialise(GlBufferType buffer_type, GLsizeiptr size_bytes, GLenum gluse, const void* data )
 {
     if(!bo) {
         glGenBuffers(1, &bo);
@@ -758,6 +788,25 @@ inline void GlBufferData::Download(GLvoid* data, GLsizeiptr size_bytes, GLintptr
     Unbind();
 }
 
+template<typename T>
+inline void GlBufferData::Upload(const std::vector<T>& data, GLintptr offset)
+{
+    const size_t total_bytes = data.size() * sizeof(T);
+    assert(offset + total_bytes <= size_bytes);
+    Upload(&data[0], total_bytes, offset);
+}
+
+#ifdef USE_EIGEN
+template<typename Derived>
+inline void GlBufferData::Upload(const Eigen::DenseBase<Derived>& data, GLintptr offset)
+{
+    const size_t num_elements = data.outerSize();
+    const size_t matrix_bytes = data.outerStride() * num_elements;
+    assert(offset + matrix_bytes <= size_bytes);
+    Upload(data.data(), matrix_bytes, offset);
+}
+#endif
+
 ////////////////////////////////////////////////////////////////////////////
 
 inline GlBuffer::GlBuffer()
@@ -787,7 +836,7 @@ inline GlBuffer& GlBuffer::operator=(GlBuffer&& o)
     return *this;
 }
 
-inline void GlBuffer::Reinitialise(GlBufferType buffer_type, GLuint num_elements, GLenum datatype, GLuint count_per_element, GLenum gluse, const unsigned char* data )
+inline void GlBuffer::Reinitialise(GlBufferType buffer_type, GLuint num_elements, GLenum datatype, GLuint count_per_element, GLenum gluse, const void *data )
 {
     this->datatype = datatype;
     this->num_elements = num_elements;
@@ -824,6 +873,30 @@ inline void GlBuffer::Resize(GLuint new_num_elements)
     num_elements = new_num_elements;
 }
 
+template<typename Scalar>
+GlBuffer::GlBuffer(GlBufferType buffer_type, const std::vector<Scalar>& data, GLenum gluse)
+    : GlBufferData(buffer_type, data, gluse)
+{
+    datatype = pangolin::GlFormatTraits<Scalar>::gltype;
+    num_elements = data.size();
+    count_per_element = 1;
+}
+
+
+#ifdef USE_EIGEN
+    template<typename Scalar, int R, int C>
+    GlBuffer::GlBuffer(GlBufferType buffer_type, const std::vector<Eigen::Matrix<Scalar, R,C>>& data, GLenum gluse)
+        : GlBufferData(buffer_type, data, gluse)
+    {
+        typedef typename Eigen::Matrix<Scalar, R,C> Element;
+        static_assert( Element::SizeAtCompileTime != Eigen::Dynamic, "No Dynamically sized elements.");
+        static_assert( Element::SizeAtCompileTime * sizeof(Scalar) == sizeof(Element), "No padded elements.");
+
+        datatype = pangolin::GlFormatTraits<Scalar>::gltype;
+        num_elements = data.size();
+        count_per_element = Element::SizeAtCompileTime;
+    }
+#endif
 
 ////////////////////////////////////////////////////////////////////////////
 
@@ -887,6 +960,40 @@ inline size_t GlSizeableBuffer::NextSize(size_t min_size) const
         new_size *= 2;
     }
     return new_size;
+}
+
+////////////////////////////////////////////////////////////////////////////
+
+inline GlVertexArrayObject::GlVertexArrayObject()
+{
+    glGenVertexArrays(1, &vao);
+}
+
+inline GlVertexArrayObject::~GlVertexArrayObject()
+{
+    glDeleteVertexArrays(1, &vao);
+}
+
+inline void GlVertexArrayObject::Bind() const
+{
+    glBindVertexArray(vao);
+
+}
+
+inline void GlVertexArrayObject::Unbind() const
+{
+    glBindVertexArray(0);
+}
+
+inline void GlVertexArrayObject::AddVertexAttrib(GLuint attrib_location, const GlBuffer& bo, size_t offset_bytes, size_t stride_bytes, GLboolean normalized)
+{
+    Bind();
+    bo.Bind();
+    CheckGlDieOnError();
+    glVertexAttribPointer(attrib_location, bo.count_per_element, bo.datatype, normalized, stride_bytes, (void*)offset_bytes);
+    CheckGlDieOnError();
+    glEnableVertexAttribArray(attrib_location);
+
 }
 
 ////////////////////////////////////////////////////////////////////////////

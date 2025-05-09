@@ -13,16 +13,19 @@ PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/src/image_view.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/ConsoleView.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/default_font.cpp
+    ${CMAKE_CURRENT_BINARY_DIR}/fonts.cpp
+)
+
+set_target_properties(
+    ${COMPONENT} PROPERTIES VERSION ${PANGOLIN_VERSION} SOVERSION ${PANGOLIN_VERSION_MAJOR}
 )
 
 target_link_libraries(${COMPONENT} PUBLIC pango_core pango_opengl pango_windowing pango_vars )
 
-target_include_directories(${COMPONENT}
-    PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include
-    PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/include
+target_include_directories(${COMPONENT} PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>
+    $<INSTALL_INTERFACE:include>
 )
-
-# Embed font
-include(EmbedBinaryFiles)
-embed_binary_files( "${CMAKE_CURRENT_LIST_DIR}/src/fonts/*.ttf" "${CMAKE_CURRENT_BINARY_DIR}/fonts.cpp" )
-target_sources( ${COMPONENT} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/fonts.cpp" )
+install(DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/include"
+  DESTINATION ${CMAKE_INSTALL_PREFIX}
+)

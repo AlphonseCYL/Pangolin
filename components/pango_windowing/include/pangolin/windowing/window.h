@@ -30,9 +30,11 @@
 #include <functional>
 #include <array>
 #include <string>
+#include <memory>
 #include <pangolin/platform.h>
 #include <pangolin/utils/signal_slot.h>
 #include <pangolin/utils/true_false_toggle.h>
+#include <pangolin/utils/uri.h>
 #include <pangolin/windowing/handler_bitsets.h>
 
 namespace pangolin
@@ -44,49 +46,50 @@ constexpr char PARAM_DOUBLEBUFFER[]   = "DOUBLEBUFFER\0";   // bool
 constexpr char PARAM_SAMPLE_BUFFERS[] = "SAMPLE_BUFFERS\0"; // int
 constexpr char PARAM_SAMPLES[]        = "SAMPLES\0";        // int
 constexpr char PARAM_HIGHRES[]        = "HIGHRES\0";        // bool
+constexpr char PARAM_GL_PROFILE[]     = "GL_PROFILE\0";     // std::string
 
-struct WindowResizeEvent
+struct PANGOLIN_EXPORT WindowResizeEvent
 {
     int width;
     int height;
 };
 
-struct WindowInputEvent
+struct PANGOLIN_EXPORT WindowInputEvent
 {
     float x;
     float y;
     KeyModifierBitmask key_modifiers;
 };
 
-struct KeyboardEvent : public WindowInputEvent
+struct PANGOLIN_EXPORT KeyboardEvent : public WindowInputEvent
 {
     unsigned char key;
     bool pressed;
 };
 
-struct MouseEvent : public WindowInputEvent
+struct PANGOLIN_EXPORT MouseEvent : public WindowInputEvent
 {
     int button;
     bool pressed;
 };
 
-struct MouseMotionEvent : public WindowInputEvent
+struct PANGOLIN_EXPORT MouseMotionEvent : public WindowInputEvent
 {
 };
 
-struct SpecialInputEvent : public WindowInputEvent
+struct PANGOLIN_EXPORT SpecialInputEvent : public WindowInputEvent
 {
     InputSpecial inType;
     float p[4];
 };
 
-class GlContextInterface
+class PANGOLIN_EXPORT GlContextInterface
 {
 public:
     virtual ~GlContextInterface() {}
 };
 
-class WindowInterface
+class PANGOLIN_EXPORT WindowInterface
 {
 public:
     virtual ~WindowInterface() {}
@@ -118,13 +121,17 @@ public:
     /// to the back buffer.
     virtual void SwapBuffers() = 0;
 
-    Signal<void()>                    CloseSignal;
-    Signal<void(WindowResizeEvent)>   ResizeSignal;
-    Signal<void(KeyboardEvent)> KeyboardSignal;
-    Signal<void(MouseEvent)>    MouseSignal;
-    Signal<void(MouseMotionEvent)> MouseMotionSignal;
-    Signal<void(MouseMotionEvent)> PassiveMouseMotionSignal;
-    Signal<void(SpecialInputEvent)> SpecialInputSignal;
+    sigslot::signal<>                    CloseSignal;
+    sigslot::signal<WindowResizeEvent>   ResizeSignal;
+    sigslot::signal<KeyboardEvent> KeyboardSignal;
+    sigslot::signal<MouseEvent>    MouseSignal;
+    sigslot::signal<MouseMotionEvent> MouseMotionSignal;
+    sigslot::signal<MouseMotionEvent> PassiveMouseMotionSignal;
+    sigslot::signal<SpecialInputEvent> SpecialInputSignal;
 };
+
+//! Open Window Interface from Uri specification
+PANGOLIN_EXPORT
+std::unique_ptr<WindowInterface> ConstructWindow(const Uri& uri);
 
 }

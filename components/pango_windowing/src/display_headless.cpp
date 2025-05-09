@@ -142,11 +142,11 @@ void HeadlessWindow::SwapBuffers() {
 
 } // namespace headless
 
-PANGOLIN_REGISTER_FACTORY(NoneWindow) {
+PANGOLIN_REGISTER_FACTORY(HeadlessWindow) {
 struct HeadlessWindowFactory : public TypedFactoryInterface<WindowInterface> {
     std::map<std::string,Precedence> Schemes() const override
     {
-        return {{"none",10}, {"nogui",10}, {"headless",10}};
+        return {{"egl",10}, {"nogui",10}, {"headless",10}, {"none",10}};
     }
     const char* Description() const override
     {
@@ -157,6 +157,8 @@ struct HeadlessWindowFactory : public TypedFactoryInterface<WindowInterface> {
         return {{
             {"w","640","Requested buffer width"},
             {"h","480","Requested buffer height"},
+            {"window_title","main","Title (Unused)"},
+            {PARAM_GL_PROFILE,"Ignored for now"},
         }};
     }
     std::unique_ptr<WindowInterface> Open(const Uri& uri) override {
